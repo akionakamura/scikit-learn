@@ -29,6 +29,7 @@ console.setFormatter(formatter)
 # add the handler to the root logger
 logging.getLogger('').addHandler(console)
 
+
 def test_dummy():
     # This is a dummy test
     var1 = 1
@@ -38,10 +39,11 @@ def test_dummy():
     assert_true(result == 3)
     logging.info('DummyTest: Result should be three: ' + str(result))
 
+
 def test_create_mppca():
     model = mixture.MPPCA(n_components=1, n_pc=1,
                  random_state=None, tol=1e-3, min_covar=1e-3,
                  n_iter=100, n_init=1, params='wmpn', init_params='wmpn',
                  verbose=0)
-    assert_true(2 == 3)
-    logging.info(model.n_pc)
+    assert_true(model.n_pc == 1)
+    logging.info('DummyTest: Result should be one: ' + str(model.n_pc))
