@@ -9,19 +9,18 @@ import warnings
 import numpy as np
 from scipy import linalg
 from time import time
+from sklearn.decomposition import PCA
 
-from ..base import BaseEstimator
+# from ..base import BaseEstimator
 from ..utils import check_random_state, check_array
 from ..utils.extmath import logsumexp
 from ..utils.validation import check_is_fitted
 from .. import cluster
 
-from sklearn.externals.six.moves import zip
-
 EPS = np.finfo(float).eps
 
 
-def log_multivariate_normal_density(X, means, covars, covariance_type='diag'):
+def log_multivariate_normal_density(X, means, covars):
     """Compute the log probability under a multivariate Gaussian distribution.
 
     Parameters
@@ -52,16 +51,10 @@ def log_multivariate_normal_density(X, means, covars, covariance_type='diag'):
         Array containing the log probabilities of each data point in
         X under each of the n_components multivariate Gaussian distributions.
     """
-    log_multivariate_normal_density_dict = {
-        'spherical': _log_multivariate_normal_density_spherical,
-        'tied': _log_multivariate_normal_density_tied,
-        'diag': _log_multivariate_normal_density_diag,
-        'full': _log_multivariate_normal_density_full}
-    return log_multivariate_normal_density_dict[covariance_type](
-        X, means, covars)
+    return _log_multivariate_normal_density_mppca(X, means, covars)
 
 
-def sample_gaussian(mean, covar, covariance_type='diag', n_samples=1,
+def sample_gaussian(mean, covar, n_samples=1,
                     random_state=None):
     """Generate random samples from a Gaussian distribution.
 
@@ -71,14 +64,7 @@ def sample_gaussian(mean, covar, covariance_type='diag', n_samples=1,
         Mean of the distribution.
 
     covar : array_like, optional
-        Covariance of the distribution. The shape depends on `covariance_type`:
-            scalar if 'spherical',
-            (n_features) if 'diag',
-            (n_features, n_features)  if 'tied', or 'full'
-
-    covariance_type : string, optional
-        Type of the covariance parameters.  Must be one of
-        'spherical', 'tied', 'diag', 'full'.  Defaults to 'diag'.
+        Covariance of the distribution.
 
     n_samples : int, optional
         Number of samples to generate. Defaults to 1.
@@ -94,41 +80,32 @@ def sample_gaussian(mean, covar, covariance_type='diag', n_samples=1,
     if n_samples == 1:
         rand.shape = (n_dim,)
 
-    if covariance_type == 'spherical':
-        rand *= np.sqrt(covar)
-    elif covariance_type == 'diag':
-        rand = np.dot(np.diag(np.sqrt(covar)), rand)
-    else:
-        s, U = linalg.eigh(covar)
-        s.clip(0, out=s)        # get rid of tiny negatives
-        np.sqrt(s, out=s)
-        U *= s
-        rand = np.dot(U, rand)
+    s, U = linalg.eigh(covar)
+    s.clip(0, out=s)        # get rid of tiny negatives
+    np.sqrt(s, out=s)
+    U *= s
+    rand = np.dot(U, rand)
 
     return (rand.T + mean).T
 
 
-class GMM(BaseEstimator):
-    """Gaussian Mixture Model
+class MPPCA:
+    """Mixture of Probabilistic Principal Component Analysis
 
-    Representation of a Gaussian mixture model probability distribution.
+    Representation of a mixture of Probabilistic PCA distribution.
     This class allows for easy evaluation of, sampling from, and
-    maximum-likelihood estimation of the parameters of a GMM distribution.
+    maximum-likelihood estimation of the parameters of a MPPCA distribution.
 
-    Initializes parameters such that every mixture component has zero
-    mean and identity covariance.
-
-    Read more in the :ref:`User Guide <gmm>`.
+    Read more in the :ref:`User Guide <mppca>`.
 
     Parameters
     ----------
     n_components : int, optional
         Number of mixture components. Defaults to 1.
 
-    covariance_type : string, optional
-        String describing the type of covariance parameters to
-        use.  Must be one of 'spherical', 'tied', 'diag', 'full'.
-        Defaults to 'diag'.
+    n_pc : int, optional
+        Number of principal components on each mixture component.
+        Defaults to 1.
 
     random_state: RandomState or an int seed (None by default)
         A random number generator instance
@@ -150,12 +127,14 @@ class GMM(BaseEstimator):
     params : string, optional
         Controls which parameters are updated in the training
         process.  Can contain any combination of 'w' for weights,
-        'm' for means, and 'c' for covars.  Defaults to 'wmc'.
+        'm' for means, 'p' for principal subspace and 'n' for noise.
+        Defaults to 'wmpn'.
 
     init_params : string, optional
         Controls which parameters are updated in the initialization
         process.  Can contain any combination of 'w' for weights,
-        'm' for means, and 'c' for covars.  Defaults to 'wmc'.
+        'm' for means, 'p' for principal subspace and 'n' for noise.
+        Defaults to 'wmpn'.
 
     verbose : int, default: 0
         Enable verbose output. If 1 then it always prints the current
@@ -170,78 +149,34 @@ class GMM(BaseEstimator):
     means_ : array, shape (`n_components`, `n_features`)
         Mean parameters for each mixture component.
 
-    covars_ : array
-        Covariance parameters for each mixture component.  The shape
-        depends on `covariance_type`::
+    noise_ : array, shape (`n_components`,)
+        This attribute stores the isotropic noise for each mixture component.
 
-            (n_components, n_features)             if 'spherical',
-            (n_features, n_features)               if 'tied',
-            (n_components, n_features)             if 'diag',
-            (n_components, n_features, n_features) if 'full'
+    principal_subspace_ : array, shape (`n_features`, `n_pc`)
+        The principal subspace matrix for each mixture component.
+
+    covars_ : array, shape (`n_features`, `n_features`)
+        Covariance parameters for each mixture component,
+        defined by [noise_ * I + (principal_subspace * principal_subspace.T)]
 
     converged_ : bool
         True when convergence was reached in fit(), False otherwise.
 
-    See Also
-    --------
-
-    DPGMM : Infinite gaussian mixture model, using the dirichlet
-        process, fit with a variational algorithm
-
-
-    VBGMM : Finite gaussian mixture model fit with a variational
-        algorithm, better for situations where there might be too little
-        data to get a good estimate of the covariance matrix.
 
     Examples
     --------
 
-    >>> import numpy as np
-    >>> from sklearn import mixture
-    >>> np.random.seed(1)
-    >>> g = mixture.GMM(n_components=2)
-    >>> # Generate random observations with two modes centered on 0
-    >>> # and 10 to use for training.
-    >>> obs = np.concatenate((np.random.randn(100, 1),
-    ...                       10 + np.random.randn(300, 1)))
-    >>> g.fit(obs) # doctest: +NORMALIZE_WHITESPACE
-    GMM(covariance_type='diag', init_params='wmc', min_covar=0.001,
-            n_components=2, n_init=1, n_iter=100, params='wmc',
-            random_state=None, thresh=None, tol=0.001, verbose=0)
-    >>> np.round(g.weights_, 2)
-    array([ 0.75,  0.25])
-    >>> np.round(g.means_, 2)
-    array([[ 10.05],
-           [  0.06]])
-    >>> np.round(g.covars_, 2) #doctest: +SKIP
-    array([[[ 1.02]],
-           [[ 0.96]]])
-    >>> g.predict([[0], [2], [9], [10]]) #doctest: +ELLIPSIS
-    array([1, 1, 0, 0]...)
-    >>> np.round(g.score([[0], [2], [9], [10]]), 2)
-    array([-2.19, -4.58, -1.75, -1.21])
-    >>> # Refit the model on new data (initial parameters remain the
-    >>> # same), this time with an even split between the two modes.
-    >>> g.fit(20 * [[0]] +  20 * [[10]]) # doctest: +NORMALIZE_WHITESPACE
-    GMM(covariance_type='diag', init_params='wmc', min_covar=0.001,
-            n_components=2, n_init=1, n_iter=100, params='wmc',
-            random_state=None, thresh=None, tol=0.001, verbose=0)
-    >>> np.round(g.weights_, 2)
-    array([ 0.5,  0.5])
+
 
     """
+    # TODO(akio) create Example
 
-    def __init__(self, n_components=1, covariance_type='diag',
-                 random_state=None, thresh=None, tol=1e-3, min_covar=1e-3,
-                 n_iter=100, n_init=1, params='wmc', init_params='wmc',
+    def __init__(self, n_components=1, n_pc=1,
+                 random_state=None, tol=1e-3, min_covar=1e-3,
+                 n_iter=100, n_init=1, params='wmpn', init_params='wmpn',
                  verbose=0):
-        if thresh is not None:
-            warnings.warn("'thresh' has been replaced by 'tol' in 0.16 "
-                          " and will be removed in 0.18.",
-                          DeprecationWarning)
         self.n_components = n_components
-        self.covariance_type = covariance_type
-        self.thresh = thresh
+        self.n_pc = n_pc
         self.tol = tol
         self.min_covar = min_covar
         self.random_state = random_state
@@ -251,12 +186,8 @@ class GMM(BaseEstimator):
         self.init_params = init_params
         self.verbose = verbose
 
-        if covariance_type not in ['spherical', 'tied', 'diag', 'full']:
-            raise ValueError('Invalid value for covariance_type: %s' %
-                             covariance_type)
-
         if n_init < 1:
-            raise ValueError('GMM estimation requires at least one run')
+            raise ValueError('MPPCA estimation requires at least one run')
 
         self.weights_ = np.ones(self.n_components) / self.n_components
 
@@ -265,29 +196,14 @@ class GMM(BaseEstimator):
         self.converged_ = False
 
     def _get_covars(self):
-        """Covariance parameters for each mixture component.
+        """Covariance parameters for each mixture component."""
+        return self.covars_
 
-        The shape depends on ``cvtype``::
-
-            (n_states, n_features)                if 'spherical',
-            (n_features, n_features)              if 'tied',
-            (n_states, n_features)                if 'diag',
-            (n_states, n_features, n_features)    if 'full'
-
-        """
-        if self.covariance_type == 'full':
-            return self.covars_
-        elif self.covariance_type == 'diag':
-            return [np.diag(cov) for cov in self.covars_]
-        elif self.covariance_type == 'tied':
-            return [self.covars_] * self.n_components
-        elif self.covariance_type == 'spherical':
-            return [np.diag(cov) for cov in self.covars_]
-
-    def _set_covars(self, covars):
+    def _set_covars(self, principal_subspace, noise):
         """Provide values for covariance"""
-        covars = np.asarray(covars)
-        _validate_covars(covars, self.covariance_type, self.n_components)
+        n_features = principal_subspace.shape[0]
+        covars = np.dot(principal_subspace.T, principal_subspace) + noise * np.eye(n_features)
+        # _validate_covars(covars, self.n_components)
         self.covars_ = covars
 
     def score_samples(self, X):
@@ -322,8 +238,7 @@ class GMM(BaseEstimator):
         if X.shape[1] != self.means_.shape[1]:
             raise ValueError('The shape of X  is not compatible with self')
 
-        lpr = (log_multivariate_normal_density(X, self.means_, self.covars_,
-                                               self.covariance_type) +
+        lpr = (log_multivariate_normal_density(X, self.means_, self.covars_) +
                np.log(self.weights_))
         logprob = logsumexp(lpr, axis=1)
         responsibilities = np.exp(lpr - logprob[:, np.newaxis])
@@ -361,7 +276,7 @@ class GMM(BaseEstimator):
         return responsibilities.argmax(axis=1)
 
     def predict_proba(self, X):
-        """Predict posterior probability of data under each Gaussian
+        """Predict posterior probability of data under each PPCA
         in the model.
 
         Parameters
@@ -408,14 +323,8 @@ class GMM(BaseEstimator):
             # number of those occurrences
             num_comp_in_X = comp_in_X.sum()
             if num_comp_in_X > 0:
-                if self.covariance_type == 'tied':
-                    cv = self.covars_
-                elif self.covariance_type == 'spherical':
-                    cv = self.covars_[comp][0]
-                else:
-                    cv = self.covars_[comp]
                 X[comp_in_X] = sample_gaussian(
-                    self.means_[comp], cv, self.covariance_type,
+                    self.means_[comp], self.covars_[comp],
                     num_comp_in_X, random_state=random_state).T
         return X
 
@@ -441,7 +350,7 @@ class GMM(BaseEstimator):
         A initialization step is performed before entering the
         expectation-maximization (EM) algorithm. If you want to avoid
         this step, set the keyword argument init_params to the empty
-        string '' when creating the GMM object. Likewise, if you would
+        string '' when creating the MPPCA object. Likewise, if you would
         like just to do an initialization, set n_iter=0.
 
         Parameters
@@ -461,7 +370,7 @@ class GMM(BaseEstimator):
         X = check_array(X, dtype=np.float64)
         if X.shape[0] < self.n_components:
             raise ValueError(
-                'GMM estimation with %s components, but got only %s samples' %
+                'MPPCA estimation with %s components, but got only %s samples' %
                 (self.n_components, X.shape[0]))
 
         max_log_prob = -np.infty
@@ -487,15 +396,18 @@ class GMM(BaseEstimator):
                 if self.verbose > 1:
                     print('\tWeights have been initialized.')
 
-            if 'c' in self.init_params or not hasattr(self, 'covars_'):
-                cv = np.cov(X.T) + self.min_covar * np.eye(X.shape[1])
-                if not cv.shape:
-                    cv.shape = (1, 1)
-                self.covars_ = \
-                    distribute_covar_matrix_to_match_covariance_type(
-                        cv, self.covariance_type, self.n_components)
+            if 'n' in self.init_params or not hasattr(self, 'noise_'):
+                self.noise_ = np.tile(1.0, self.n_components)
                 if self.verbose > 1:
-                    print('\tCovariance matrices have been initialized.')
+                    print('\tNoise value have been initialized.')
+
+            if 'p' in self.init_params or not hasattr(self, 'principal_subspace_'):
+                pca = PCA(n_components=self.n_pc)
+                pca.fit(X)
+                self.principal_subspace_ = pca.components_.T
+                self._set_covars(self.principal_subspace_, self.noise_)
+                if self.verbose > 1:
+                    print('\tPrincipal sub-space have been initialized.')
 
             # EM algorithms
             current_log_likelihood = None
@@ -503,8 +415,7 @@ class GMM(BaseEstimator):
             self.converged_ = False
 
             # this line should be removed when 'thresh' is removed in v0.18
-            tol = (self.tol if self.thresh is None
-                   else self.thresh / float(X.shape[0]))
+            tol = self.tol
 
             for i in range(self.n_iter):
                 if self.verbose > 0:
@@ -541,7 +452,8 @@ class GMM(BaseEstimator):
                     max_log_prob = current_log_likelihood
                     best_params = {'weights': self.weights_,
                                    'means': self.means_,
-                                   'covars': self.covars_}
+                                   'principal_subspace': self.principal_subspace_,
+                                   'noise': self.noise_}
                     if self.verbose > 1:
                         print('\tBetter parameters were found.')
 
@@ -558,7 +470,9 @@ class GMM(BaseEstimator):
                 "(or increasing n_init) or check for degenerate data.")
 
         if self.n_iter:
-            self.covars_ = best_params['covars']
+            self.principal_subspace_ = best_params['principal_subspace']
+            self.noise_ = best_params['noise']
+            self._set_covars(self.principal_subspace_, self.noise_)
             self.means_ = best_params['means']
             self.weights_ = best_params['weights']
         else:  # self.n_iter == 0 occurs when using GMM within HMM
@@ -601,12 +515,13 @@ class GMM(BaseEstimator):
             self.weights_ = (weights / (weights.sum() + 10 * EPS) + EPS)
         if 'm' in params:
             self.means_ = weighted_X_sum * inverse_weights
-        if 'c' in params:
-            covar_mstep_func = _covar_mstep_funcs[self.covariance_type]
-            self.covars_ = covar_mstep_func(
+        new_subspace, new_noise = _covar_mstep_mppca(
                 self, X, responsibilities, weighted_X_sum, inverse_weights,
                 min_covar)
-        return weights
+        if 'p' in params:
+            self.principal_subspace_ = new_subspace
+        if 'n' in params:
+            self.noise_ = new_noise
 
     def _n_parameters(self):
         """Return the number of free parameters in the model."""
@@ -656,34 +571,7 @@ class GMM(BaseEstimator):
 # some helper routines
 #########################################################################
 
-
-def _log_multivariate_normal_density_diag(X, means, covars):
-    """Compute Gaussian log-density at X for a diagonal model"""
-    n_samples, n_dim = X.shape
-    lpr = -0.5 * (n_dim * np.log(2 * np.pi) + np.sum(np.log(covars), 1)
-                  + np.sum((means ** 2) / covars, 1)
-                  - 2 * np.dot(X, (means / covars).T)
-                  + np.dot(X ** 2, (1.0 / covars).T))
-    return lpr
-
-
-def _log_multivariate_normal_density_spherical(X, means, covars):
-    """Compute Gaussian log-density at X for a spherical model"""
-    cv = covars.copy()
-    if covars.ndim == 1:
-        cv = cv[:, np.newaxis]
-    if covars.shape[1] == 1:
-        cv = np.tile(cv, (1, X.shape[-1]))
-    return _log_multivariate_normal_density_diag(X, means, cv)
-
-
-def _log_multivariate_normal_density_tied(X, means, covars):
-    """Compute Gaussian log-density at X for a tied model"""
-    cv = np.tile(covars, (means.shape[0], 1, 1))
-    return _log_multivariate_normal_density_full(X, means, cv)
-
-
-def _log_multivariate_normal_density_full(X, means, covars, min_covar=1.e-7):
+def _log_multivariate_normal_density_mppca(X, means, covars, min_covar=1.e-7):
     """Log probability for full covariance matrices."""
     n_samples, n_dim = X.shape
     nmix = len(means)
@@ -709,43 +597,20 @@ def _log_multivariate_normal_density_full(X, means, covars, min_covar=1.e-7):
     return log_prob
 
 
-def _validate_covars(covars, covariance_type, n_components):
-    """Do basic checks on matrix covariance sizes and values
-    """
-    from scipy import linalg
-    if covariance_type == 'spherical':
-        if len(covars) != n_components:
-            raise ValueError("'spherical' covars have length n_components")
-        elif np.any(covars <= 0):
-            raise ValueError("'spherical' covars must be non-negative")
-    elif covariance_type == 'tied':
-        if covars.shape[0] != covars.shape[1]:
-            raise ValueError("'tied' covars must have shape (n_dim, n_dim)")
-        elif (not np.allclose(covars, covars.T)
-              or np.any(linalg.eigvalsh(covars) <= 0)):
-            raise ValueError("'tied' covars must be symmetric, "
-                             "positive-definite")
-    elif covariance_type == 'diag':
-        if len(covars.shape) != 2:
-            raise ValueError("'diag' covars must have shape "
-                             "(n_components, n_dim)")
-        elif np.any(covars <= 0):
-            raise ValueError("'diag' covars must be non-negative")
-    elif covariance_type == 'full':
-        if len(covars.shape) != 3:
-            raise ValueError("'full' covars must have shape "
-                             "(n_components, n_dim, n_dim)")
-        elif covars.shape[1] != covars.shape[2]:
-            raise ValueError("'full' covars must have shape "
-                             "(n_components, n_dim, n_dim)")
-        for n, cv in enumerate(covars):
-            if (not np.allclose(cv, cv.T)
-                    or np.any(linalg.eigvalsh(cv) <= 0)):
-                raise ValueError("component %d of 'full' covars must be "
-                                 "symmetric, positive-definite" % n)
-    else:
-        raise ValueError("covariance_type must be one of " +
-                         "'spherical', 'tied', 'diag', 'full'")
+# def _validate_covars(covars, n_components):
+#     """Do basic checks on matrix covariance sizes and values"""
+#     from scipy import linalg
+#     if len(covars.shape) != 3:
+#         raise ValueError("covars must have shape "
+#                          "(n_components, n_dim, n_dim)")
+#     elif covars.shape[1] != covars.shape[2]:
+#         raise ValueError("covars must have shape "
+#                          "(n_components, n_dim, n_dim)")
+#     for n, cv in enumerate(covars):
+#         if (not np.allclose(cv, cv.T)
+#                 or np.any(linalg.eigvalsh(cv) <= 0)):
+#             raise ValueError("component %d of 'full' covars must be "
+#                              "symmetric, positive-definite" % n)
 
 
 def distribute_covar_matrix_to_match_covariance_type(
@@ -810,8 +675,25 @@ def _covar_mstep_tied(gmm, X, responsibilities, weighted_X_sum, norm,
     out.flat[::len(out) + 1] += min_covar
     return out
 
-_covar_mstep_funcs = {'spherical': _covar_mstep_spherical,
-                      'diag': _covar_mstep_diag,
-                      'tied': _covar_mstep_tied,
-                      'full': _covar_mstep_full,
-                      }
+def _covar_mstep_mppca(gmm, X, responsibilities, weighted_X_sum, norm,
+                      min_covar):
+    n_features = X.shape[1]
+    n_data = X.shape[0]
+    Minv = np.empty((gmm.n_components, gmm.n_pc, gmm.n_pc))
+    S = np.empty((gmm.n_components, n_features, n_features))
+    W = np.empty((gmm.n_components, n_features, gmm.n_pc))
+    noises = np.empty((gmm.n_components, gmm.n_components, 1))
+    for c in range(gmm.n_components):
+        post = responsibilities[:, c]
+        mu = gmm.means_[c]
+        diff = X - mu
+        Minv[c] = np.inv(gmm.noise_ * np.eye(gmm.n_pc) + np.dot(gmm.principal_subspace_.T, gmm.principal_subspace_))
+        with np.errstate(under='ignore'):
+            # Underflow Errors in doing post * X.T are  not important
+            S[c] = np.dot(post * diff.T, diff) / (n_data*gmm.weights_[c] + 10 * EPS)
+
+        W[c] = np.dot(np.dot(S[c], gmm.principal_subspace_[c]),
+                      np.inv(gmm.noise_ * np.eye(gmm.n_features) + np.dot(np.dot(np.dot(Minv[c],
+                                                                          gmm.principal_subspace_[c].T), S[c]), gmm.principal_subspace_[c])))
+        noises[c] = np.trace(S[c] - np.dot(S[c], np.dot(gmm.principal_subspace_[c], np.dot(Minv, W[c].T))))/n_features
+    return W, noises
