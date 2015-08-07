@@ -75,3 +75,15 @@ def test_custom_create_mppca():
     assert_true(model.weights_.shape == (2,), msg='Wrong weights_')
     assert_true(~model.converged_, msg='Wrong converged_')
     logging.info('CustomCreationTest: OK')
+
+def test_set_get_covars():
+    n_components=2
+    principal_subspace = np.tile(np.array([[1, 2], [3, 4], [5, 6]]), (n_components, 1, 1))
+    noise = np.tile(2.0, n_components)
+    expected_result = np.dot(principal_subspace[0], principal_subspace[0].T) + noise[0] * np.eye(3)
+    model = mixture.MPPCA(n_components=n_components)
+    model._set_covars(principal_subspace, noise)
+    result = model._get_covars()
+    for comp in range(n_components):
+        assert_true(np.array_equal(result[comp], expected_result), msg='Wrong covar')
+    logging.info('CovarSetAndGetTest: OK')

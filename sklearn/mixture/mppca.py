@@ -152,12 +152,12 @@ class MPPCA:
     noise_ : array, shape (`n_components`,)
         This attribute stores the isotropic noise for each mixture component.
 
-    principal_subspace_ : array, shape (`n_features`, `n_pc`)
+    principal_subspace_ : array, shape (n_components, n_features, n_pc)
         The principal subspace matrix for each mixture component.
 
-    covars_ : array, shape (`n_features`, `n_features`)
+    covars_ : array, shape (n_components, n_features, n_pc)
         Covariance parameters for each mixture component,
-        defined by [noise_ * I + (principal_subspace * principal_subspace.T)]
+        defined by [noise_ * I + (principal_subspace * principal_subspace.T)] for each component
 
     converged_ : bool
         True when convergence was reached in fit(), False otherwise.
@@ -201,9 +201,11 @@ class MPPCA:
 
     def _set_covars(self, principal_subspace, noise):
         """Provide values for covariance"""
-        n_features = principal_subspace.shape[0]
-        covars = np.dot(principal_subspace.T, principal_subspace) + noise * np.eye(n_features)
-        # _validate_covars(covars, self.n_components)
+        n_features = principal_subspace.shape[1]
+        covars = np.zeros((self.n_components, n_features, n_features))
+        for comp in range(self.n_components):
+            covars[comp] = principal_subspace[comp].dot(principal_subspace[comp].T) + noise[comp] * np.eye(n_features)
+        _validate_covars(covars, self.n_components)
         self.covars_ = covars
 
     def score_samples(self, X):
@@ -404,7 +406,7 @@ class MPPCA:
             if 'p' in self.init_params or not hasattr(self, 'principal_subspace_'):
                 pca = PCA(n_components=self.n_pc)
                 pca.fit(X)
-                self.principal_subspace_ = pca.components_.T
+                self.principal_subspace_ = np.tile(pca.components_.T, (self.n_components, 1, 1))
                 self._set_covars(self.principal_subspace_, self.noise_)
                 if self.verbose > 1:
                     print('\tPrincipal sub-space have been initialized.')
@@ -597,83 +599,21 @@ def _log_multivariate_normal_density_mppca(X, means, covars, min_covar=1.e-7):
     return log_prob
 
 
-# def _validate_covars(covars, n_components):
-#     """Do basic checks on matrix covariance sizes and values"""
-#     from scipy import linalg
-#     if len(covars.shape) != 3:
-#         raise ValueError("covars must have shape "
-#                          "(n_components, n_dim, n_dim)")
-#     elif covars.shape[1] != covars.shape[2]:
-#         raise ValueError("covars must have shape "
-#                          "(n_components, n_dim, n_dim)")
-#     for n, cv in enumerate(covars):
-#         if (not np.allclose(cv, cv.T)
-#                 or np.any(linalg.eigvalsh(cv) <= 0)):
-#             raise ValueError("component %d of 'full' covars must be "
-#                              "symmetric, positive-definite" % n)
+def _validate_covars(covars, n_components):
+    """Do basic checks on matrix covariance sizes and values"""
+    from scipy import linalg
+    if len(covars.shape) != 3:
+        raise ValueError("covars must have shape "
+                         "(n_components, n_dim, n_dim)")
+    elif covars.shape[1] != covars.shape[2]:
+        raise ValueError("covars must have shape "
+                         "(n_components, n_dim, n_dim)")
+    for n, cv in enumerate(covars):
+        if (not np.allclose(cv, cv.T)
+                or np.any(linalg.eigvalsh(cv) <= 0)):
+            raise ValueError("component %d of 'full' covars must be "
+                             "symmetric, positive-definite" % n)
 
-
-def distribute_covar_matrix_to_match_covariance_type(
-        tied_cv, covariance_type, n_components):
-    """Create all the covariance matrices from a given template"""
-    if covariance_type == 'spherical':
-        cv = np.tile(tied_cv.mean() * np.ones(tied_cv.shape[1]),
-                     (n_components, 1))
-    elif covariance_type == 'tied':
-        cv = tied_cv
-    elif covariance_type == 'diag':
-        cv = np.tile(np.diag(tied_cv), (n_components, 1))
-    elif covariance_type == 'full':
-        cv = np.tile(tied_cv, (n_components, 1, 1))
-    else:
-        raise ValueError("covariance_type must be one of " +
-                         "'spherical', 'tied', 'diag', 'full'")
-    return cv
-
-
-def _covar_mstep_diag(gmm, X, responsibilities, weighted_X_sum, norm,
-                      min_covar):
-    """Performing the covariance M step for diagonal cases"""
-    avg_X2 = np.dot(responsibilities.T, X * X) * norm
-    avg_means2 = gmm.means_ ** 2
-    avg_X_means = gmm.means_ * weighted_X_sum * norm
-    return avg_X2 - 2 * avg_X_means + avg_means2 + min_covar
-
-
-def _covar_mstep_spherical(*args):
-    """Performing the covariance M step for spherical cases"""
-    cv = _covar_mstep_diag(*args)
-    return np.tile(cv.mean(axis=1)[:, np.newaxis], (1, cv.shape[1]))
-
-
-def _covar_mstep_full(gmm, X, responsibilities, weighted_X_sum, norm,
-                      min_covar):
-    """Performing the covariance M step for full cases"""
-    # Eq. 12 from K. Murphy, "Fitting a Conditional Linear Gaussian
-    # Distribution"
-    n_features = X.shape[1]
-    cv = np.empty((gmm.n_components, n_features, n_features))
-    for c in range(gmm.n_components):
-        post = responsibilities[:, c]
-        mu = gmm.means_[c]
-        diff = X - mu
-        with np.errstate(under='ignore'):
-            # Underflow Errors in doing post * X.T are  not important
-            avg_cv = np.dot(post * diff.T, diff) / (post.sum() + 10 * EPS)
-        cv[c] = avg_cv + min_covar * np.eye(n_features)
-    return cv
-
-
-def _covar_mstep_tied(gmm, X, responsibilities, weighted_X_sum, norm,
-                      min_covar):
-    # Eq. 15 from K. Murphy, "Fitting a Conditional Linear Gaussian
-    # Distribution"
-    avg_X2 = np.dot(X.T, X)
-    avg_means2 = np.dot(gmm.means_.T, weighted_X_sum)
-    out = avg_X2 - avg_means2
-    out *= 1. / X.shape[0]
-    out.flat[::len(out) + 1] += min_covar
-    return out
 
 def _covar_mstep_mppca(gmm, X, responsibilities, weighted_X_sum, norm,
                       min_covar):
@@ -682,18 +622,18 @@ def _covar_mstep_mppca(gmm, X, responsibilities, weighted_X_sum, norm,
     Minv = np.empty((gmm.n_components, gmm.n_pc, gmm.n_pc))
     S = np.empty((gmm.n_components, n_features, n_features))
     W = np.empty((gmm.n_components, n_features, gmm.n_pc))
-    noises = np.empty((gmm.n_components, gmm.n_components, 1))
+    noises = np.empty(gmm.n_components)
     for c in range(gmm.n_components):
         post = responsibilities[:, c]
         mu = gmm.means_[c]
         diff = X - mu
-        Minv[c] = np.inv(gmm.noise_ * np.eye(gmm.n_pc) + np.dot(gmm.principal_subspace_.T, gmm.principal_subspace_))
+        Minv[c] = np.linalg.inv(gmm.noise_[c] * np.eye(gmm.n_pc) + np.dot(gmm.principal_subspace_[c].T, gmm.principal_subspace_[c]))
         with np.errstate(under='ignore'):
             # Underflow Errors in doing post * X.T are  not important
             S[c] = np.dot(post * diff.T, diff) / (n_data*gmm.weights_[c] + 10 * EPS)
 
-        W[c] = np.dot(np.dot(S[c], gmm.principal_subspace_[c]),
-                      np.inv(gmm.noise_ * np.eye(gmm.n_features) + np.dot(np.dot(np.dot(Minv[c],
-                                                                          gmm.principal_subspace_[c].T), S[c]), gmm.principal_subspace_[c])))
-        noises[c] = np.trace(S[c] - np.dot(S[c], np.dot(gmm.principal_subspace_[c], np.dot(Minv, W[c].T))))/n_features
+        W[c] = S[c].dot(gmm.principal_subspace_[c])\
+            .dot(np.linalg.inv(gmm.noise_[c] * np.eye(gmm.n_pc)
+                               + Minv[c].dot(gmm.principal_subspace_[c].T).dot(S[c]).dot(gmm.principal_subspace_[c])))
+        noises[c] = np.trace(S[c] - np.dot(S[c], np.dot(gmm.principal_subspace_[c], np.dot(Minv[c], W[c].T))))/n_features
     return W, noises
