@@ -11,7 +11,7 @@ from scipy import linalg
 from time import time
 from sklearn.decomposition import PCA
 
-# from ..base import BaseEstimator
+from ..base import BaseEstimator
 from ..utils import check_random_state, check_array
 from ..utils.extmath import logsumexp
 from ..utils.validation import check_is_fitted
@@ -89,7 +89,7 @@ def sample_gaussian(mean, covar, n_samples=1,
     return (rand.T + mean).T
 
 
-class MPPCA:
+class MPPCA(BaseEstimator):
     """Mixture of Probabilistic Principal Component Analysis
 
     Representation of a mixture of Probabilistic PCA distribution.
@@ -245,6 +245,23 @@ class MPPCA:
         logprob = logsumexp(lpr, axis=1)
         responsibilities = np.exp(lpr - logprob[:, np.newaxis])
         return logprob, responsibilities
+
+    def sum_score(self, X, y=None):
+        """Compute the sum log probability under the model.
+
+        Parameters
+        ----------
+        X : array_like, shape (n_samples, n_features)
+            List of n_features-dimensional data points.  Each row
+            corresponds to a single data point.
+
+        Returns
+        -------
+        logprob : float
+            Sum of the Log probabilities of every data point in X
+        """
+        logprob, _ = self.score_samples(X)
+        return logprob.sum()
 
     def score(self, X, y=None):
         """Compute the log probability under the model.
@@ -528,14 +545,7 @@ class MPPCA:
     def _n_parameters(self):
         """Return the number of free parameters in the model."""
         ndim = self.means_.shape[1]
-        if self.covariance_type == 'full':
-            cov_params = self.n_components * ndim * (ndim + 1) / 2.
-        elif self.covariance_type == 'diag':
-            cov_params = self.n_components * ndim
-        elif self.covariance_type == 'tied':
-            cov_params = ndim * (ndim + 1) / 2.
-        elif self.covariance_type == 'spherical':
-            cov_params = self.n_components
+        cov_params = self.n_components * (ndim*self.n_pc - self.n_pc*(self.n_pc - 1)/2) + self.n_components
         mean_params = ndim * self.n_components
         return int(cov_params + mean_params + self.n_components - 1)
 

@@ -5,15 +5,9 @@ import logging
 
 from nose.tools import assert_true
 import numpy as np
-from numpy.testing import (assert_array_equal, assert_array_almost_equal,
-                           assert_raises)
-from scipy import stats
+from numpy.testing import assert_array_almost_equal
 from sklearn import mixture
-from sklearn.datasets.samples_generator import make_spd_matrix
-from sklearn.utils.testing import assert_greater
-from sklearn.utils.testing import assert_raise_message
-from sklearn.metrics.cluster import adjusted_rand_score
-from sklearn.externals.six.moves import cStringIO as StringIO
+from sklearn.datasets import make_blobs
 
 # set up logging to file - see previous section for more details
 logging.basicConfig(level=logging.DEBUG,
@@ -58,9 +52,15 @@ def test_default_create_mppca():
 
 
 def test_custom_create_mppca():
-    model = mixture.MPPCA(n_components=2, n_pc=2,
-                          random_state=1, tol=1e-6, min_covar=1e-6,
-                          n_iter=10, n_init=2, params='w', init_params='m',
+    model = mixture.MPPCA(n_components=2,
+                          n_pc=2,
+                          random_state=1,
+                          tol=1e-6,
+                          min_covar=1e-6,
+                          n_iter=10,
+                          n_init=2,
+                          params='w',
+                          init_params='m',
                           verbose=2)
     assert_true(model.n_components == 2, msg='Wrong n_components')
     assert_true(model.n_pc == 2, msg='Wrong n_pc')
@@ -76,6 +76,7 @@ def test_custom_create_mppca():
     assert_true(~model.converged_, msg='Wrong converged_')
     logging.info('CustomCreationTest: OK')
 
+
 def test_set_get_covars():
     n_components=2
     principal_subspace = np.tile(np.array([[1, 2], [3, 4], [5, 6]]), (n_components, 1, 1))
@@ -87,3 +88,62 @@ def test_set_get_covars():
     for comp in range(n_components):
         assert_true(np.array_equal(result[comp], expected_result), msg='Wrong covar')
     logging.info('CovarSetAndGetTest: OK')
+
+def test_simple_fit_mean():
+    n_samples = 10000
+    n_features = 5
+    centers = np.array([[10, 5, 1, -5, -10]])
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers)
+    model = mixture.MPPCA()
+    model.fit(X)
+    assert_array_almost_equal(model.means_, centers, decimal=1)
+    logging.info('TestSimpleFitMeans: OK')
+
+
+def test_simple_fit_weights():
+    n_samples = 10000
+    n_features = 5
+    centers = np.array([[10, 5, 1, -5, -10],
+                        [-10, -5, -1, 5, 10]])
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers)
+    model = mixture.MPPCA(n_components=2)
+    model.fit(X)
+    assert_array_almost_equal(model.weights_, [0.5, 0.5])
+    logging.info('TestSimpleFitWeights: OK')
+
+
+def test_simple_fit_noise():
+    n_samples = 10000
+    n_features = 5
+    centers = np.array([[10, 5, 1, -5, -10]])
+    cluster_std = 2.0
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers,
+                      cluster_std=cluster_std)
+    model = mixture.MPPCA()
+    model.fit(X)
+    assert_array_almost_equal(model.noise_, [3.5], decimal=1)
+    logging.info('TestSimpleFitNoise: OK')
+
+def test_sample_score():
+    n_samples = 5000
+    n_features = 5
+    n_components = 3
+    centers = np.array([[10, 5, 1, -5, -10],
+                        [-10, -5, -1, 5, 10],
+                        [10, -5, 1, -5, 10]])
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers, random_state=10)
+    model = mixture.MPPCA(n_components=n_components)
+    model.fit(X)
+    sampled = model.sample(n_samples=n_samples, random_state=10)
+    sum_score_sampled = model.sum_score(sampled)
+    sum_score_X = model.sum_score(X)
+    assert_array_almost_equal(sum_score_sampled/1000, sum_score_X/1000, decimal=1)
+    logging.info('TestSampleScore: OK')
