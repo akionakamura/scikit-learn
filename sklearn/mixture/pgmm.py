@@ -19,7 +19,7 @@ from .. import cluster
 EPS = np.finfo(float).eps
 
 
-def log_multivariate_normal_density(X, means, covars, covariance_type='diag'):
+def log_multivariate_normal_density(X, means, covars, min_covar=1.e-7):
     """Compute the log probability under a parsimonious Gaussian mixture distribution.
 
     Parameters
@@ -36,9 +36,9 @@ def log_multivariate_normal_density(X, means, covars, covariance_type='diag'):
     covars : array_like
         List of n_components covariance parameters for each Gaussian.
 
-    covariance_type : string
-        Type of the covariance parameters.  Must be one of
-        'spherical', 'tied', 'diag', 'full'.  Defaults to 'diag'.
+    min_covar : float, optional
+        Floor on the diagonal of the covariance matrix to prevent
+        overfitting.  Defaults to 1e-3.
 
     Returns
     -------
@@ -46,17 +46,31 @@ def log_multivariate_normal_density(X, means, covars, covariance_type='diag'):
         Array containing the log probabilities of each data point in
         X under each of the n_components multivariate Gaussian distributions.
     """
-    log_multivariate_normal_density_dict = {
-        'spherical': _log_multivariate_normal_density_spherical,
-        'tied': _log_multivariate_normal_density_tied,
-        'diag': _log_multivariate_normal_density_diag,
-        'full': _log_multivariate_normal_density_full}
-    return log_multivariate_normal_density_dict[covariance_type](
-        X, means, covars)
+    """Log probability for full covariance matrices."""
+    n_samples, n_dim = X.shape
+    nmix = len(means)
+    log_prob = np.empty((n_samples, nmix))
+    for c, (mu, cv) in enumerate(zip(means, covars)):
+        try:
+            cv_chol = linalg.cholesky(cv, lower=True)
+        except linalg.LinAlgError:
+            # The model is most probably stuck in a component with too
+            # few observations, we need to reinitialize this components
+            try:
+                cv_chol = linalg.cholesky(cv + min_covar * np.eye(n_dim),
+                                          lower=True)
+            except linalg.LinAlgError:
+                raise ValueError("'covars' must be symmetric, "
+                                 "positive-definite")
+
+        cv_log_det = 2 * np.sum(np.log(np.diagonal(cv_chol)))
+        cv_sol = linalg.solve_triangular(cv_chol, (X - mu).T, lower=True).T
+        log_prob[:, c] = - .5 * (np.sum(cv_sol ** 2, axis=1) +
+                                 n_dim * np.log(2 * np.pi) + cv_log_det)
+    return log_prob
 
 
-def sample_gaussian(mean, covar, covariance_type='diag', n_samples=1,
-                    random_state=None):
+def sample_gaussian(mean, covar, n_samples=1, random_state=None):
     """Generate random samples from a parsimonious Gaussian mixture  distribution.
 
     Parameters
@@ -66,14 +80,7 @@ def sample_gaussian(mean, covar, covariance_type='diag', n_samples=1,
         Mean of the distribution.
 
     covar : array_like, optional
-        Covariance of the distribution. The shape depends on `covariance_type`:
-            scalar if 'spherical',
-            (n_features) if 'diag',
-            (n_features, n_features)  if 'tied', or 'full'
-
-    covariance_type : string, optional
-        Type of the covariance parameters.  Must be one of
-        'spherical', 'tied', 'diag', 'full'.  Defaults to 'diag'.
+        Covariance of the distribution.
 
     n_samples : int, optional
         Number of samples to generate. Defaults to 1.
@@ -89,16 +96,11 @@ def sample_gaussian(mean, covar, covariance_type='diag', n_samples=1,
     if n_samples == 1:
         rand.shape = (n_dim,)
 
-    if covariance_type == 'spherical':
-        rand *= np.sqrt(covar)
-    elif covariance_type == 'diag':
-        rand = np.dot(np.diag(np.sqrt(covar)), rand)
-    else:
-        s, U = linalg.eigh(covar)
-        s.clip(0, out=s)        # get rid of tiny negatives
-        np.sqrt(s, out=s)
-        U *= s
-        rand = np.dot(U, rand)
+    s, U = linalg.eigh(covar)
+    s.clip(0, out=s)        # get rid of tiny negatives
+    np.sqrt(s, out=s)
+    U *= s
+    rand = np.dot(U, rand)
 
     return (rand.T + mean).T
 
@@ -199,7 +201,8 @@ class PGMM(BaseEstimator):
             (n_components, n_features, n_pc) if 'UUU'
 
     covars_ : array, shape (n_components, n_features, n_features)
-        Covariance parameters for each mixture component.
+        Covariance parameters for each mixture component,
+        defined by [noise_ + (principal_subspace * principal_subspace.T)] for each component
 
     converged_ : bool
         True when convergence was reached in fit(), False otherwise.
@@ -222,8 +225,8 @@ class PGMM(BaseEstimator):
 
     """
 
-    def __init__(self, n_components=1, n_pc=1, covariance_type='IIR',
-                 random_state=None, tol=1e-3, min_covar=1e-3,
+    def __init__(self, n_components=1, n_pc=1, covariance_type='UUR',
+                 random_state=None, tol=1e-3, min_covar=1e-7,
                  n_iter=100, n_init=1, params='wmc', init_params='wmc',
                  verbose=0):
         self.n_components = n_components
@@ -253,30 +256,65 @@ class PGMM(BaseEstimator):
         self.converged_ = False
 
     def _get_covars(self):
-        """Covariance parameters for each mixture component.
+        """Covariance parameters for each mixture component."""
+        return self.covars_
 
-        The shape depends on ``cvtype``::
-
-            (n_states, n_features)                if 'spherical',
-            (n_features, n_features)              if 'tied',
-            (n_states, n_features)                if 'diag',
-            (n_states, n_features, n_features)    if 'full'
-
-        """
-        if self.covariance_type == 'full':
-            return self.covars_
-        elif self.covariance_type == 'diag':
-            return [np.diag(cov) for cov in self.covars_]
-        elif self.covariance_type == 'tied':
-            return [self.covars_] * self.n_components
-        elif self.covariance_type == 'spherical':
-            return [np.diag(cov) for cov in self.covars_]
-
-    def _set_covars(self, covars):
+    def _set_covars(self, principal_subspace, noise):
         """Provide values for covariance"""
-        covars = np.asarray(covars)
-        _validate_covars(covars, self.covariance_type, self.n_components)
+        n_features = principal_subspace.shape[1]
+        noises = np.empty((self.n_components, n_features, n_features))
+        subspaces = np.empty((self.n_components, n_features, self.n_pc))
+        covars = np.zeros((self.n_components, n_features, n_features))
+        if self.covariance_type == 'RRR':
+            #              noise: (1)
+            # principal_subspace: (n_features, n_pc)
+            noises = np.tile(noise * np.eye(n_features), (self.n_components, 1, 1))
+            subspaces = np.tile(principal_subspace, (self.n_components, 1, 1))
+        if self.covariance_type == 'RRU':
+            #              noise: (n_features, )
+            # principal_subspace: (n_features, n_pc)
+            noises = np.tile(np.diag(noise), (self.n_components, 1, 1))
+            subspaces = np.tile(principal_subspace, (self.n_components, 1, 1))
+        if self.covariance_type == 'RUR':
+            #              noise: (n_components, )
+            # principal_subspace: (n_features, n_pc)
+            for idx, n in enumerate(noise):
+                noises[idx] = n * np.eye(n_features)
+            subspaces = np.tile(principal_subspace, (self.n_components, 1, 1))
+        if self.covariance_type == 'RUU':
+            #              noise: (n_components, n_features)
+            # principal_subspace: (n_features, n_pc)
+            for idx in np.arange(n_features):
+                noises[idx] = np.diag(noise[idx, :])
+            subspaces = np.tile(principal_subspace, (self.n_components, 1, 1))
+        if self.covariance_type == 'URR':
+            #              noise: (1)
+            # principal_subspace: (n_components, n_features, n_pc)
+            noises = np.tile(noise * np.eye(n_features), (self.n_components, 1, 1))
+            subspaces = principal_subspace
+        if self.covariance_type == 'URU':
+            #              noise: (n_features, )
+            # principal_subspace: (n_components, n_features, n_pc)
+            noises = np.tile(np.diag(noise), (self.n_components, 1, 1))
+            subspaces = principal_subspace
+        if self.covariance_type == 'UUR':
+            #              noise: (n_components, )
+            # principal_subspace: (n_components, n_features, n_pc)
+            for idx, n in enumerate(noise):
+                noises[idx] = n * np.eye(n_features)
+            subspaces = principal_subspace
+        if self.covariance_type == 'UUU':
+            #              noise: (n_components, n_features)
+            # principal_subspace: (n_components, n_features, n_pc)
+            for idx in np.arange(n_features):
+                noises[idx] = np.diag(noise[idx, :])
+            subspaces = principal_subspace
+
+        for comp in range(self.n_components):
+            covars[comp] = subspaces[comp].dot(subspaces[comp].T) + noises[comp]
+        _validate_covars(covars, self.n_components)
         self.covars_ = covars
+
 
     def score_samples(self, X):
         """Return the per-sample likelihood of the data under the model.
@@ -310,8 +348,8 @@ class PGMM(BaseEstimator):
         if X.shape[1] != self.means_.shape[1]:
             raise ValueError('The shape of X  is not compatible with self')
 
-        lpr = (log_multivariate_normal_density(X, self.means_, self.covars_,
-                                               self.covariance_type) +
+        lpr = (log_multivariate_normal_density(X, self.means_,
+                                               self.covariance_type, min_covar) +
                np.log(self.weights_))
         logprob = logsumexp(lpr, axis=1)
         responsibilities = np.exp(lpr - logprob[:, np.newaxis])
