@@ -227,7 +227,7 @@ class PGMM(BaseEstimator):
 
     def __init__(self, n_components=1, n_pc=1, covariance_type='UUR',
                  random_state=None, tol=1e-3, min_covar=1e-7,
-                 n_iter=100, n_init=1, params='wmc', init_params='wmc',
+                 n_iter=100, n_init=1, params='wmpn', init_params='wmpn',
                  verbose=0):
         self.n_components = n_components
         self.n_pc = n_pc
@@ -312,7 +312,7 @@ class PGMM(BaseEstimator):
 
         for comp in range(self.n_components):
             covars[comp] = subspaces[comp].dot(subspaces[comp].T) + noises[comp]
-        _validate_covars(covars, self.n_components)
+        _validate_covars(covars)
         self.covars_ = covars
 
 
@@ -349,11 +349,28 @@ class PGMM(BaseEstimator):
             raise ValueError('The shape of X  is not compatible with self')
 
         lpr = (log_multivariate_normal_density(X, self.means_,
-                                               self.covariance_type, min_covar) +
+                                               self.covariance_type, self.min_covar) +
                np.log(self.weights_))
         logprob = logsumexp(lpr, axis=1)
         responsibilities = np.exp(lpr - logprob[:, np.newaxis])
         return logprob, responsibilities
+
+    def sum_score(self, X, y=None):
+        """Compute the sum log probability under the model.
+
+        Parameters
+        ----------
+        X : array_like, shape (n_samples, n_features)
+            List of n_features-dimensional data points.  Each row
+            corresponds to a single data point.
+
+        Returns
+        -------
+        logprob : float
+            Sum of the Log probabilities of every data point in X
+        """
+        logprob, _ = self.score_samples(X)
+        return logprob.sum()
 
     def score(self, X, y=None):
         """Compute the log probability under the model.
@@ -434,14 +451,8 @@ class PGMM(BaseEstimator):
             # number of those occurrences
             num_comp_in_X = comp_in_X.sum()
             if num_comp_in_X > 0:
-                if self.covariance_type == 'tied':
-                    cv = self.covars_
-                elif self.covariance_type == 'spherical':
-                    cv = self.covars_[comp][0]
-                else:
-                    cv = self.covars_[comp]
                 X[comp_in_X] = sample_gaussian(
-                    self.means_[comp], cv, self.covariance_type,
+                    self.means_[comp], self.covars_[comp],
                     num_comp_in_X, random_state=random_state).T
         return X
 
@@ -682,96 +693,20 @@ class PGMM(BaseEstimator):
 # some helper routines
 #########################################################################
 
-
-def _log_multivariate_normal_density_diag(X, means, covars):
-    """Compute Gaussian log-density at X for a diagonal model"""
-    n_samples, n_dim = X.shape
-    lpr = -0.5 * (n_dim * np.log(2 * np.pi) + np.sum(np.log(covars), 1)
-                  + np.sum((means ** 2) / covars, 1)
-                  - 2 * np.dot(X, (means / covars).T)
-                  + np.dot(X ** 2, (1.0 / covars).T))
-    return lpr
-
-
-def _log_multivariate_normal_density_spherical(X, means, covars):
-    """Compute Gaussian log-density at X for a spherical model"""
-    cv = covars.copy()
-    if covars.ndim == 1:
-        cv = cv[:, np.newaxis]
-    if covars.shape[1] == 1:
-        cv = np.tile(cv, (1, X.shape[-1]))
-    return _log_multivariate_normal_density_diag(X, means, cv)
-
-
-def _log_multivariate_normal_density_tied(X, means, covars):
-    """Compute Gaussian log-density at X for a tied model"""
-    cv = np.tile(covars, (means.shape[0], 1, 1))
-    return _log_multivariate_normal_density_full(X, means, cv)
-
-
-def _log_multivariate_normal_density_full(X, means, covars, min_covar=1.e-7):
-    """Log probability for full covariance matrices."""
-    n_samples, n_dim = X.shape
-    nmix = len(means)
-    log_prob = np.empty((n_samples, nmix))
-    for c, (mu, cv) in enumerate(zip(means, covars)):
-        try:
-            cv_chol = linalg.cholesky(cv, lower=True)
-        except linalg.LinAlgError:
-            # The model is most probably stuck in a component with too
-            # few observations, we need to reinitialize this components
-            try:
-                cv_chol = linalg.cholesky(cv + min_covar * np.eye(n_dim),
-                                          lower=True)
-            except linalg.LinAlgError:
-                raise ValueError("'covars' must be symmetric, "
-                                 "positive-definite")
-
-        cv_log_det = 2 * np.sum(np.log(np.diagonal(cv_chol)))
-        cv_sol = linalg.solve_triangular(cv_chol, (X - mu).T, lower=True).T
-        log_prob[:, c] = - .5 * (np.sum(cv_sol ** 2, axis=1) +
-                                 n_dim * np.log(2 * np.pi) + cv_log_det)
-
-    return log_prob
-
-
-def _validate_covars(covars, covariance_type, n_components):
-    """Do basic checks on matrix covariance sizes and values
-    """
+def _validate_covars(covars):
+    """Do basic checks on matrix covariance sizes and values"""
     from scipy import linalg
-    if covariance_type == 'spherical':
-        if len(covars) != n_components:
-            raise ValueError("'spherical' covars have length n_components")
-        elif np.any(covars <= 0):
-            raise ValueError("'spherical' covars must be non-negative")
-    elif covariance_type == 'tied':
-        if covars.shape[0] != covars.shape[1]:
-            raise ValueError("'tied' covars must have shape (n_dim, n_dim)")
-        elif (not np.allclose(covars, covars.T)
-              or np.any(linalg.eigvalsh(covars) <= 0)):
-            raise ValueError("'tied' covars must be symmetric, "
-                             "positive-definite")
-    elif covariance_type == 'diag':
-        if len(covars.shape) != 2:
-            raise ValueError("'diag' covars must have shape "
-                             "(n_components, n_dim)")
-        elif np.any(covars <= 0):
-            raise ValueError("'diag' covars must be non-negative")
-    elif covariance_type == 'full':
-        if len(covars.shape) != 3:
-            raise ValueError("'full' covars must have shape "
-                             "(n_components, n_dim, n_dim)")
-        elif covars.shape[1] != covars.shape[2]:
-            raise ValueError("'full' covars must have shape "
-                             "(n_components, n_dim, n_dim)")
-        for n, cv in enumerate(covars):
-            if (not np.allclose(cv, cv.T)
-                    or np.any(linalg.eigvalsh(cv) <= 0)):
-                raise ValueError("component %d of 'full' covars must be "
-                                 "symmetric, positive-definite" % n)
-    else:
-        raise ValueError("covariance_type must be one of " +
-                         "'spherical', 'tied', 'diag', 'full'")
+    if len(covars.shape) != 3:
+        raise ValueError("covars must have shape "
+                         "(n_components, n_dim, n_dim)")
+    elif covars.shape[1] != covars.shape[2]:
+        raise ValueError("covars must have shape "
+                         "(n_components, n_dim, n_dim)")
+    for n, cv in enumerate(covars):
+        if (not np.allclose(cv, cv.T)
+                or np.any(linalg.eigvalsh(cv) <= 0)):
+            raise ValueError("component %d of 'full' covars must be "
+                             "symmetric, positive-definite" % n)
 
 
 def distribute_covar_matrix_to_match_covariance_type(
