@@ -14,6 +14,7 @@ from ..base import BaseEstimator
 from ..utils import check_random_state, check_array
 from ..utils.extmath import logsumexp
 from ..utils.validation import check_is_fitted
+from sklearn.decomposition import PCA
 from .. import cluster
 
 EPS = np.finfo(float).eps
@@ -524,15 +525,21 @@ class PGMM(BaseEstimator):
                 if self.verbose > 1:
                     print('\tWeights have been initialized.')
 
-            if 'c' in self.init_params or not hasattr(self, 'covars_'):
-                cv = np.cov(X.T) + self.min_covar * np.eye(X.shape[1])
-                if not cv.shape:
-                    cv.shape = (1, 1)
-                self.covars_ = \
-                    distribute_covar_matrix_to_match_covariance_type(
-                        cv, self.covariance_type, self.n_components)
+            if 'n' in self.init_params or not hasattr(self, 'noise_'):
+                self.noise_ = np.tile(1.0, self.n_components)
                 if self.verbose > 1:
-                    print('\tCovariance matrices have been initialized.')
+                    print('\tNoise value have been initialized.')
+
+            if 'p' in self.init_params or not hasattr(self, 'principal_subspace_'):
+                pca = PCA(n_components=self.n_pc)
+                pca.fit(X)
+                ps = pca.components_.T
+                self.principal_subspace_ = \
+                    distribute_covar_matrix_to_match_covariance_type(
+                        ps, self.covariance_type, self.n_components)
+                self._set_covars(self.principal_subspace_, self.noise_)
+                if self.verbose > 1:
+                    print('\tPrincipal sub-space have been initialized.')
 
             # EM algorithms
             current_log_likelihood = None
@@ -540,8 +547,7 @@ class PGMM(BaseEstimator):
             self.converged_ = False
 
             # this line should be removed when 'thresh' is removed in v0.18
-            tol = (self.tol if self.thresh is None
-                   else self.thresh / float(X.shape[0]))
+            tol = self.tol
 
             for i in range(self.n_iter):
                 if self.verbose > 0:
@@ -553,8 +559,6 @@ class PGMM(BaseEstimator):
                 current_log_likelihood = log_likelihoods.mean()
 
                 # Check for convergence.
-                # (should compare to self.tol when deprecated 'thresh' is
-                # removed in v0.18)
                 if prev_log_likelihood is not None:
                     change = abs(current_log_likelihood - prev_log_likelihood)
                     if self.verbose > 1:
@@ -578,7 +582,8 @@ class PGMM(BaseEstimator):
                     max_log_prob = current_log_likelihood
                     best_params = {'weights': self.weights_,
                                    'means': self.means_,
-                                   'covars': self.covars_}
+                                   'principal_subspace': self.principal_subspace_,
+                                   'noise': self.noise_}
                     if self.verbose > 1:
                         print('\tBetter parameters were found.')
 
@@ -595,7 +600,9 @@ class PGMM(BaseEstimator):
                 "(or increasing n_init) or check for degenerate data.")
 
         if self.n_iter:
-            self.covars_ = best_params['covars']
+            self.principal_subspace_ = best_params['principal_subspace']
+            self.noise_ = best_params['noise']
+            self._set_covars(self.principal_subspace_, self.noise_)
             self.means_ = best_params['means']
             self.weights_ = best_params['weights']
         else:  # self.n_iter == 0 occurs when using GMM within HMM
@@ -648,16 +655,26 @@ class PGMM(BaseEstimator):
     def _n_parameters(self):
         """Return the number of free parameters in the model."""
         ndim = self.means_.shape[1]
-        if self.covariance_type == 'full':
-            cov_params = self.n_components * ndim * (ndim + 1) / 2.
-        elif self.covariance_type == 'diag':
-            cov_params = self.n_components * ndim
-        elif self.covariance_type == 'tied':
-            cov_params = ndim * (ndim + 1) / 2.
-        elif self.covariance_type == 'spherical':
-            cov_params = self.n_components
-        mean_params = ndim * self.n_components
-        return int(cov_params + mean_params + self.n_components - 1)
+        npc = self.n_pc
+        ncomp = self.n_components
+        if self.covariance_type == 'RRR':
+            cov_params = (ndim * npc - npc*(npc - 1)/2) + 1
+        elif self.covariance_type == 'RRU':
+            cov_params = (ndim * npc - npc*(npc - 1)/2) + ndim
+        elif self.covariance_type == 'RUR':
+            cov_params = (ndim * npc - npc*(npc - 1)/2) + ncomp
+        elif self.covariance_type == 'RUU':
+            cov_params = (ndim * npc - npc*(npc - 1)/2) + ndim * ncomp
+        elif self.covariance_type == 'URR':
+            cov_params = ncomp * (ndim * npc - npc*(npc - 1)/2) + 1
+        elif self.covariance_type == 'URU':
+            cov_params = ncomp * (ndim * npc - npc*(npc - 1)/2) + ndim
+        elif self.covariance_type == 'UUR':
+            cov_params = ncomp * (ndim * npc - npc*(npc - 1)/2) + ncomp
+        elif self.covariance_type == 'UUU':
+            cov_params = ncomp * (ndim * npc - npc*(npc - 1)/2) + ndim * ncomp
+        mean_params = ndim * ncomp
+        return int(cov_params + mean_params + ncomp - 1)
 
     def bic(self, X):
         """Bayesian information criterion for the current model fit
@@ -710,21 +727,16 @@ def _validate_covars(covars):
 
 
 def distribute_covar_matrix_to_match_covariance_type(
-        tied_cv, covariance_type, n_components):
+        tied_sp, covariance_type, n_components):
     """Create all the covariance matrices from a given template"""
-    if covariance_type == 'spherical':
-        cv = np.tile(tied_cv.mean() * np.ones(tied_cv.shape[1]),
-                     (n_components, 1))
-    elif covariance_type == 'tied':
-        cv = tied_cv
-    elif covariance_type == 'diag':
-        cv = np.tile(np.diag(tied_cv), (n_components, 1))
-    elif covariance_type == 'full':
-        cv = np.tile(tied_cv, (n_components, 1, 1))
+    if covariance_type.startswith('R'):
+        sp = covariance_type
+    elif covariance_type.startswith('U'):
+        sp = np.tile(tied_sp, (n_components, 1, 1))
     else:
-        raise ValueError("covariance_type must be one of " +
-                         "'spherical', 'tied', 'diag', 'full'")
-    return cv
+        raise ValueError("covariance_type must start with" +
+                         "'R' or 'U'")
+    return sp
 
 
 def _covar_mstep_diag(gmm, X, responsibilities, weighted_X_sum, norm,

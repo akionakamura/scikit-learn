@@ -446,8 +446,6 @@ class MPPCA(BaseEstimator):
                 current_log_likelihood = log_likelihoods.mean()
 
                 # Check for convergence.
-                # (should compare to self.tol when deprecated 'thresh' is
-                # removed in v0.18)
                 if prev_log_likelihood is not None:
                     change = abs(current_log_likelihood - prev_log_likelihood)
                     if self.verbose > 1:
