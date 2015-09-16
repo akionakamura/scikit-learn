@@ -77,3 +77,16 @@ def test_custom_create_pgmm():
     assert_true(model.weights_.shape == (2,), msg='Wrong weights_')
     assert_true(~model.converged_, msg='Wrong converged_')
     logging.info('CustomCreationTest: OK')
+
+
+def test_simple_fit_mean():
+    n_samples = 10000
+    n_features = 5
+    centers = np.array([[10, 5, 1, -5, -10]])
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers)
+    model = mixture.PGMM()
+    model.fit(X)
+    assert_array_almost_equal(model.means_, centers, decimal=1)
+    logging.info('TestSimpleFitMeans: OK')

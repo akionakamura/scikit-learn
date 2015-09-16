@@ -350,7 +350,7 @@ class PGMM(BaseEstimator):
             raise ValueError('The shape of X  is not compatible with self')
 
         lpr = (log_multivariate_normal_density(X, self.means_,
-                                               self.covariance_type, self.min_covar) +
+                                               self.covars_, self.min_covar) +
                np.log(self.weights_))
         logprob = logsumexp(lpr, axis=1)
         responsibilities = np.exp(lpr - logprob[:, np.newaxis])
@@ -645,12 +645,14 @@ class PGMM(BaseEstimator):
             self.weights_ = (weights / (weights.sum() + 10 * EPS) + EPS)
         if 'm' in params:
             self.means_ = weighted_X_sum * inverse_weights
-        if 'c' in params:
-            covar_mstep_func = _covar_mstep_funcs[self.covariance_type]
-            self.covars_ = covar_mstep_func(
-                self, X, responsibilities, weighted_X_sum, inverse_weights,
-                min_covar)
-        return weights
+        covar_mstep_func = _covar_mstep_funcs[self.covariance_type]
+        new_subspace, new_noise = covar_mstep_func(self, X, responsibilities, weighted_X_sum,
+                                                   inverse_weights, min_covar)
+        if 'p' in params:
+            self.principal_subspace_ = new_subspace
+        if 'n' in params:
+            self.noise_ = new_noise
+
 
     def _n_parameters(self):
         """Return the number of free parameters in the model."""
@@ -739,52 +741,99 @@ def distribute_covar_matrix_to_match_covariance_type(
     return sp
 
 
-def _covar_mstep_diag(gmm, X, responsibilities, weighted_X_sum, norm,
-                      min_covar):
-    """Performing the covariance M step for diagonal cases"""
-    avg_X2 = np.dot(responsibilities.T, X * X) * norm
-    avg_means2 = gmm.means_ ** 2
-    avg_X_means = gmm.means_ * weighted_X_sum * norm
-    return avg_X2 - 2 * avg_X_means + avg_means2 + min_covar
-
-
-def _covar_mstep_spherical(*args):
-    """Performing the covariance M step for spherical cases"""
-    cv = _covar_mstep_diag(*args)
-    return np.tile(cv.mean(axis=1)[:, np.newaxis], (1, cv.shape[1]))
-
-
-def _covar_mstep_full(gmm, X, responsibilities, weighted_X_sum, norm,
-                      min_covar):
-    """Performing the covariance M step for full cases"""
-    # Eq. 12 from K. Murphy, "Fitting a Conditional Linear Gaussian
-    # Distribution"
+def _covar_mstep_RRR(pgmm, X, responsibilities, weighted_X_sum,
+                     norm, min_covar):
     n_features = X.shape[1]
-    cv = np.empty((gmm.n_components, n_features, n_features))
-    for c in range(gmm.n_components):
+    n_data = X.shape[0]
+    noises = np.empty((pgmm.n_components, n_features, n_features))
+    subspaces = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
+    return subspaces, noises
+
+
+def _covar_mstep_RRU(pgmm, X, responsibilities, weighted_X_sum,
+                     norm, min_covar):
+    n_features = X.shape[1]
+    n_data = X.shape[0]
+    noises = np.empty((pgmm.n_components, n_features, n_features))
+    subspaces = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
+    return subspaces, noises
+
+
+def _covar_mstep_RUR(pgmm, X, responsibilities, weighted_X_sum,
+                     norm, min_covar):
+    n_features = X.shape[1]
+    n_data = X.shape[0]
+    noises = np.empty((pgmm.n_components, n_features, n_features))
+    subspaces = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
+    return subspaces, noises
+
+
+def _covar_mstep_RUU(pgmm, X, responsibilities, weighted_X_sum,
+                     norm, min_covar):
+    n_features = X.shape[1]
+    n_data = X.shape[0]
+    noises = np.empty((pgmm.n_components, n_features, n_features))
+    subspaces = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
+    return subspaces, noises
+
+
+def _covar_mstep_URR(pgmm, X, responsibilities, weighted_X_sum,
+                     norm, min_covar):
+    n_features = X.shape[1]
+    n_data = X.shape[0]
+    noises = np.empty((pgmm.n_components, n_features, n_features))
+    subspaces = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
+    return subspaces, noises
+
+
+def _covar_mstep_URU(pgmm, X, responsibilities, weighted_X_sum,
+                     norm, min_covar):
+    n_features = X.shape[1]
+    n_data = X.shape[0]
+    noises = np.empty((pgmm.n_components, n_features, n_features))
+    subspaces = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
+    return subspaces, noises
+
+
+def _covar_mstep_UUR(pgmm, X, responsibilities, weighted_X_sum,
+                     norm, min_covar):
+    n_features = X.shape[1]
+    n_data = X.shape[0]
+    Minv = np.empty((pgmm.n_components, pgmm.n_pc, pgmm.n_pc))
+    S = np.empty((pgmm.n_components, n_features, n_features))
+    W = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
+    noises = np.empty(pgmm.n_components)
+    for c in range(pgmm.n_components):
         post = responsibilities[:, c]
-        mu = gmm.means_[c]
+        mu = pgmm.means_[c]
         diff = X - mu
+        Minv[c] = np.linalg.inv(pgmm.noise_[c] * np.eye(pgmm.n_pc) + np.dot(pgmm.principal_subspace_[c].T, pgmm.principal_subspace_[c]))
         with np.errstate(under='ignore'):
             # Underflow Errors in doing post * X.T are  not important
-            avg_cv = np.dot(post * diff.T, diff) / (post.sum() + 10 * EPS)
-        cv[c] = avg_cv + min_covar * np.eye(n_features)
-    return cv
+            S[c] = np.dot(post * diff.T, diff) / (n_data*pgmm.weights_[c] + 10 * EPS)
+
+        W[c] = S[c].dot(pgmm.principal_subspace_[c])\
+            .dot(np.linalg.inv(pgmm.noise_[c] * np.eye(pgmm.n_pc)
+                               + Minv[c].dot(pgmm.principal_subspace_[c].T).dot(S[c]).dot(pgmm.principal_subspace_[c])))
+        noises[c] = np.trace(S[c] - np.dot(S[c], np.dot(pgmm.principal_subspace_[c], np.dot(Minv[c], W[c].T))))/n_features
+    return W, noises
 
 
-def _covar_mstep_tied(gmm, X, responsibilities, weighted_X_sum, norm,
-                      min_covar):
-    # Eq. 15 from K. Murphy, "Fitting a Conditional Linear Gaussian
-    # Distribution"
-    avg_X2 = np.dot(X.T, X)
-    avg_means2 = np.dot(gmm.means_.T, weighted_X_sum)
-    out = avg_X2 - avg_means2
-    out *= 1. / X.shape[0]
-    out.flat[::len(out) + 1] += min_covar
-    return out
+def _covar_mstep_UUU(pgmm, X, responsibilities, weighted_X_sum,
+                     norm, min_covar):
+    n_features = X.shape[1]
+    n_data = X.shape[0]
+    noises = np.empty((pgmm.n_components, n_features, n_features))
+    subspaces = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
+    return subspaces, noises
 
-_covar_mstep_funcs = {'spherical': _covar_mstep_spherical,
-                      'diag': _covar_mstep_diag,
-                      'tied': _covar_mstep_tied,
-                      'full': _covar_mstep_full,
+
+_covar_mstep_funcs = {'RRR': _covar_mstep_RRR,
+                      'RRU': _covar_mstep_RRU,
+                      'RUR': _covar_mstep_RUR,
+                      'RUU': _covar_mstep_RUU,
+                      'URR': _covar_mstep_URR,
+                      'URU': _covar_mstep_URU,
+                      'UUR': _covar_mstep_UUR,
+                      'UUU': _covar_mstep_UUU,
                       }
