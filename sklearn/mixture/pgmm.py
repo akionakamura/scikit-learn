@@ -262,7 +262,11 @@ class PGMM(BaseEstimator):
 
     def _set_covars(self, principal_subspace, noise):
         """Provide values for covariance"""
-        n_features = principal_subspace.shape[1]
+        if self.covariance_type.startswith('R'):
+            n_features = principal_subspace.shape[0]
+        else:
+            n_features = principal_subspace.shape[1]
+
         noises = np.empty((self.n_components, n_features, n_features))
         subspaces = np.empty((self.n_components, n_features, self.n_pc))
         covars = np.zeros((self.n_components, n_features, n_features))
@@ -307,7 +311,7 @@ class PGMM(BaseEstimator):
         if self.covariance_type == 'UUU':
             #              noise: (n_components, n_features)
             # principal_subspace: (n_components, n_features, n_pc)
-            for idx in np.arange(n_features):
+            for idx in np.arange(self.n_components):
                 noises[idx] = np.diag(noise[idx, :])
             subspaces = principal_subspace
 
@@ -497,6 +501,7 @@ class PGMM(BaseEstimator):
 
         # initialization step
         X = check_array(X, dtype=np.float64)
+        n_features = X.shape[1]
         if X.shape[0] < self.n_components:
             raise ValueError(
                 'GMM estimation with %s components, but got only %s samples' %
@@ -526,7 +531,17 @@ class PGMM(BaseEstimator):
                     print('\tWeights have been initialized.')
 
             if 'n' in self.init_params or not hasattr(self, 'noise_'):
-                self.noise_ = np.tile(1.0, self.n_components)
+                if self.covariance_type.endswith('RR'):
+                    self.noise_ = np.tile(1.0, 1)
+                elif self.covariance_type.endswith('RU'):
+                    self.noise_ = np.tile(1.0, n_features)
+                elif self.covariance_type.endswith('UR'):
+                    self.noise_ = np.tile(1.0, self.n_components)
+                elif self.covariance_type.endswith('UU'):
+                    self.noise_ = np.tile(1.0, (self.n_components, n_features))
+                else:
+                    raise ValueError('Invalid value for covariance_type: %s' %
+                                                 self.covariance_type)
                 if self.verbose > 1:
                     print('\tNoise value have been initialized.')
 
@@ -732,7 +747,7 @@ def distribute_covar_matrix_to_match_covariance_type(
         tied_sp, covariance_type, n_components):
     """Create all the covariance matrices from a given template"""
     if covariance_type.startswith('R'):
-        sp = covariance_type
+        sp = tied_sp
     elif covariance_type.startswith('U'):
         sp = np.tile(tied_sp, (n_components, 1, 1))
     else:
@@ -745,9 +760,26 @@ def _covar_mstep_RRR(pgmm, X, responsibilities, weighted_X_sum,
                      norm, min_covar):
     n_features = X.shape[1]
     n_data = X.shape[0]
-    noises = np.empty((pgmm.n_components, n_features, n_features))
-    subspaces = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
-    return subspaces, noises
+    S = np.empty((pgmm.n_components, n_features, n_features))
+    final_S = np.tile(0, (n_features, n_features))
+
+    for c in range(pgmm.n_components):
+        post = responsibilities[:, c]
+        mu = pgmm.means_[c]
+        diff = X - mu
+        with np.errstate(under='ignore'):
+            # Underflow Errors in doing post * X.T are  not important
+            S[c] = np.dot(post * diff.T, diff) / (n_data*pgmm.weights_[c] + 10 * EPS)
+            final_S = final_S + S[c]
+
+    beta = pgmm.principal_subspace_.T.dot(
+        np.linalg.inv(pgmm.noise_*np.eye(n_features)
+        + pgmm.principal_subspace_.dot(pgmm.principal_subspace_.T)))
+    theta = np.eye(pgmm.n_pc) - beta.dot(pgmm.principal_subspace_) + beta.dot(final_S).dot(beta.T)
+    W = final_S.dot(beta.T).dot(np.linalg.inv(theta))
+    noises = np.trace(final_S - W.dot(beta).dot(final_S))/n_features
+
+    return W, noises
 
 
 def _covar_mstep_RRU(pgmm, X, responsibilities, weighted_X_sum,
@@ -781,18 +813,57 @@ def _covar_mstep_URR(pgmm, X, responsibilities, weighted_X_sum,
                      norm, min_covar):
     n_features = X.shape[1]
     n_data = X.shape[0]
-    noises = np.empty((pgmm.n_components, n_features, n_features))
-    subspaces = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
-    return subspaces, noises
+    beta = np.empty((pgmm.n_components, pgmm.n_pc, n_features))
+    theta = np.empty((pgmm.n_components, pgmm.n_pc, pgmm.n_pc))
+    S = np.empty((pgmm.n_components, n_features, n_features))
+    W = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
+    noises = np.tile(0, 1)
+    for c in range(pgmm.n_components):
+        post = responsibilities[:, c]
+        mu = pgmm.means_[c]
+        diff = X - mu
+        with np.errstate(under='ignore'):
+            # Underflow Errors in doing post * X.T are  not important
+            S[c] = np.dot(post * diff.T, diff) / (n_data*pgmm.weights_[c] + 10 * EPS)
+
+        beta[c] = pgmm.principal_subspace_[c].T.dot(
+            np.linalg.inv(pgmm.noise_*np.eye(n_features)
+            + pgmm.principal_subspace_[c].dot(pgmm.principal_subspace_[c].T)))
+        theta[c] = np.eye(pgmm.n_pc) - beta[c].dot(pgmm.principal_subspace_[c]) + beta[c].dot(S[c]).dot(beta[c].T)
+
+        W[c] = S[c].dot(beta[c].T).dot(np.linalg.inv(theta[c]))
+        noises = noises + pgmm.weights_[c]*np.trace(S[c] - W[c].dot(beta[c]).dot(S[c]))
+
+    noises = noises/n_features
+    return W, noises
 
 
 def _covar_mstep_URU(pgmm, X, responsibilities, weighted_X_sum,
                      norm, min_covar):
     n_features = X.shape[1]
     n_data = X.shape[0]
-    noises = np.empty((pgmm.n_components, n_features, n_features))
-    subspaces = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
-    return subspaces, noises
+    beta = np.empty((pgmm.n_components, pgmm.n_pc, n_features))
+    theta = np.empty((pgmm.n_components, pgmm.n_pc, pgmm.n_pc))
+    S = np.empty((pgmm.n_components, n_features, n_features))
+    W = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
+    noises = np.tile(0, n_features)
+    for c in range(pgmm.n_components):
+        post = responsibilities[:, c]
+        mu = pgmm.means_[c]
+        diff = X - mu
+        with np.errstate(under='ignore'):
+            # Underflow Errors in doing post * X.T are  not important
+            S[c] = np.dot(post * diff.T, diff) / (n_data*pgmm.weights_[c] + 10 * EPS)
+
+        beta[c] = pgmm.principal_subspace_[c].T.dot(
+            np.linalg.inv(np.diag(pgmm.noise_)
+            + pgmm.principal_subspace_[c].dot(pgmm.principal_subspace_[c].T)))
+        theta[c] = np.eye(pgmm.n_pc) - beta[c].dot(pgmm.principal_subspace_[c]) + beta[c].dot(S[c]).dot(beta[c].T)
+
+        W[c] = S[c].dot(beta[c].T).dot(np.linalg.inv(theta[c]))
+        noises = noises + pgmm.weights_[c]*np.diag(S[c] - W[c].dot(beta[c]).dot(S[c]))
+
+    return W, noises
 
 
 def _covar_mstep_UUR(pgmm, X, responsibilities, weighted_X_sum,
@@ -823,9 +894,27 @@ def _covar_mstep_UUU(pgmm, X, responsibilities, weighted_X_sum,
                      norm, min_covar):
     n_features = X.shape[1]
     n_data = X.shape[0]
-    noises = np.empty((pgmm.n_components, n_features, n_features))
-    subspaces = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
-    return subspaces, noises
+    beta = np.empty((pgmm.n_components, pgmm.n_pc, n_features))
+    theta = np.empty((pgmm.n_components, pgmm.n_pc, pgmm.n_pc))
+    S = np.empty((pgmm.n_components, n_features, n_features))
+    W = np.empty((pgmm.n_components, n_features, pgmm.n_pc))
+    noises = np.empty((pgmm.n_components, n_features))
+    for c in range(pgmm.n_components):
+        post = responsibilities[:, c]
+        mu = pgmm.means_[c]
+        diff = X - mu
+        with np.errstate(under='ignore'):
+            # Underflow Errors in doing post * X.T are  not important
+            S[c] = np.dot(post * diff.T, diff) / (n_data*pgmm.weights_[c] + 10 * EPS)
+
+        beta[c] = pgmm.principal_subspace_[c].T.dot(
+            np.linalg.inv(np.diag(pgmm.noise_[c])
+            + pgmm.principal_subspace_[c].dot(pgmm.principal_subspace_[c].T)))
+        theta[c] = np.eye(pgmm.n_pc) - beta[c].dot(pgmm.principal_subspace_[c]) + beta[c].dot(S[c]).dot(beta[c].T)
+
+        W[c] = S[c].dot(beta[c].T).dot(np.linalg.inv(theta[c]))
+        noises[c] = np.diag(S[c] - W[c].dot(beta[c]).dot(S[c]))
+    return W, noises
 
 
 _covar_mstep_funcs = {'RRR': _covar_mstep_RRR,

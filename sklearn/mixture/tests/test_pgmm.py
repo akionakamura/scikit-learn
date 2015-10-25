@@ -79,14 +79,69 @@ def test_custom_create_pgmm():
     logging.info('CustomCreationTest: OK')
 
 
-def test_simple_fit_mean():
+def test_simple_fit_mean_rrr():
     n_samples = 10000
     n_features = 5
     centers = np.array([[10, 5, 1, -5, -10]])
     X, y = make_blobs(n_features=n_features,
                       n_samples=n_samples,
                       centers=centers)
-    model = mixture.PGMM()
+    model = mixture.PGMM(covariance_type='RRR')
+    model.fit(X)
+    logging.info(model.means_)
+    logging.info(model.noise_)
+    logging.info(model.principal_subspace_)
+    assert_array_almost_equal(model.means_, centers, decimal=1)
+    logging.info('TestSimpleFitMeansRRR: OK')
+
+
+def test_simple_fit_mean_urr():
+    n_samples = 10000
+    n_features = 5
+    centers = np.array([[10, 5, 1, -5, -10]])
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers)
+    model = mixture.PGMM(covariance_type='URR')
     model.fit(X)
     assert_array_almost_equal(model.means_, centers, decimal=1)
-    logging.info('TestSimpleFitMeans: OK')
+    logging.info('TestSimpleFitMeansURR: OK')
+
+
+def test_simple_fit_mean_uru():
+    n_samples = 10000
+    n_features = 5
+    centers = np.array([[10, 5, 1, -5, -10]])
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers)
+    model = mixture.PGMM(covariance_type='URU')
+    model.fit(X)
+    assert_array_almost_equal(model.means_, centers, decimal=1)
+    logging.info('TestSimpleFitMeansURU: OK')
+
+
+def test_simple_fit_mean_uur():
+    n_samples = 10000
+    n_features = 5
+    centers = np.array([[10, 5, 1, -5, -10]])
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers)
+    model = mixture.PGMM(covariance_type='UUR')
+    model.fit(X)
+    assert_array_almost_equal(model.means_, centers, decimal=1)
+    logging.info('TestSimpleFitMeansUUR: OK')
+
+
+def test_simple_fit_mean_uuu():
+    n_samples = 10000
+    n_features = 5
+    centers = np.array([[10, 5, 1, -5, -10]])
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers)
+    model = mixture.PGMM(covariance_type='UUU')
+    model.fit(X)
+    assert_array_almost_equal(model.means_, centers, decimal=1)
+    logging.info('TestSimpleFitMeansUUU: OK')
