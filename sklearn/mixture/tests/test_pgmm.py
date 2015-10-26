@@ -6,6 +6,7 @@ import logging
 from nose.tools import assert_true
 import numpy as np
 from numpy.testing import assert_array_almost_equal
+from numpy.testing import assert_equal
 from sklearn import mixture
 from sklearn.datasets import make_blobs
 
@@ -181,3 +182,275 @@ def test_simple_fit_mean_uuu():
     model.fit(X)
     assert_array_almost_equal(model.means_, centers, decimal=1)
     logging.info('TestSimpleFitMeansUUU: OK')
+
+
+def test_fit_rrr():
+    n_samples1 = 10000
+    n_features = 5
+    centers1 = np.array([[10, 5, 1, -5, -10],
+                        [-10, -5, -1, 5, 10]])
+    cluster_std1 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0],
+                            [5.0, 4.0, 3.0, 2.0, 1.0]])
+
+    X1, y1 = make_blobs(n_features=n_features,
+                      n_samples=n_samples1,
+                      centers=centers1,
+                      cluster_std=cluster_std1)
+
+    n_samples2 = 5000
+    centers2 = np.array([[10, 5, 1, -5, -10]])
+    cluster_std2 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]])
+    X2, y2 = make_blobs(n_features=n_features,
+                      n_samples=n_samples2,
+                      centers=centers2,
+                      cluster_std=cluster_std2)
+    X = np.vstack((X1, X2))
+
+    model = mixture.PGMM(covariance_type='RRR', n_components=2, n_pc=3)
+    model.fit(X)
+    assert_array_almost_equal(np.sum(model.means_, 0), np.sum(centers1, 0), decimal=0)
+    assert_array_almost_equal(np.sort(model.weights_), np.array([0.333, 0.666]), decimal=1)
+    assert_equal(model.means_.shape, np.array([2, n_features]))
+    assert_equal(model.weights_.shape, np.array([2]))
+    assert_equal(model.noise_.shape, np.array([1]))
+    assert_equal(model.principal_subspace_.shape, np.array([n_features, 3]))
+    assert_equal(model.covars_.shape, np.array([2, n_features, n_features]))
+    logging.info('TestFitRRR: OK')
+
+
+def test_fit_rru():
+    n_samples1 = 10000
+    n_features = 5
+    centers1 = np.array([[10, 5, 1, -5, -10],
+                        [-10, -5, -1, 5, 10]])
+    cluster_std1 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0],
+                            [5.0, 4.0, 3.0, 2.0, 1.0]])
+
+    X1, y1 = make_blobs(n_features=n_features,
+                      n_samples=n_samples1,
+                      centers=centers1,
+                      cluster_std=cluster_std1)
+
+    n_samples2 = 5000
+    centers2 = np.array([[10, 5, 1, -5, -10]])
+    cluster_std2 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]])
+    X2, y2 = make_blobs(n_features=n_features,
+                      n_samples=n_samples2,
+                      centers=centers2,
+                      cluster_std=cluster_std2)
+    X = np.vstack((X1, X2))
+
+    model = mixture.PGMM(covariance_type='RRU', n_components=2, n_pc=3)
+    model.fit(X)
+    assert_array_almost_equal(np.sum(model.means_, 0), np.sum(centers1, 0), decimal=0)
+    assert_array_almost_equal(np.sort(model.weights_), np.array([0.333, 0.666]), decimal=1)
+    assert_equal(model.means_.shape, np.array([2, n_features]))
+    assert_equal(model.weights_.shape, np.array([2]))
+    assert_equal(model.noise_.shape, np.array([n_features]))
+    assert_equal(model.principal_subspace_.shape, np.array([n_features, 3]))
+    assert_equal(model.covars_.shape, np.array([2, n_features, n_features]))
+    logging.info('TestFitRRU: OK')
+
+
+def test_fit_rur():
+    n_samples1 = 10000
+    n_features = 5
+    centers1 = np.array([[10, 5, 1, -5, -10],
+                        [-10, -5, -1, 5, 10]])
+    cluster_std1 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0],
+                            [5.0, 4.0, 3.0, 2.0, 1.0]])
+
+    X1, y1 = make_blobs(n_features=n_features,
+                      n_samples=n_samples1,
+                      centers=centers1,
+                      cluster_std=cluster_std1)
+
+    n_samples2 = 5000
+    centers2 = np.array([[10, 5, 1, -5, -10]])
+    cluster_std2 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]])
+    X2, y2 = make_blobs(n_features=n_features,
+                      n_samples=n_samples2,
+                      centers=centers2,
+                      cluster_std=cluster_std2)
+    X = np.vstack((X1, X2))
+
+    model = mixture.PGMM(covariance_type='RUR', n_components=2, n_pc=3)
+    model.fit(X)
+    assert_array_almost_equal(np.sum(model.means_, 0), np.sum(centers1, 0), decimal=0)
+    assert_array_almost_equal(np.sort(model.weights_), np.array([0.333, 0.666]), decimal=1)
+    assert_equal(model.means_.shape, np.array([2, n_features]))
+    assert_equal(model.weights_.shape, np.array([2]))
+    assert_equal(model.noise_.shape, np.array([2]))
+    assert_equal(model.principal_subspace_.shape, np.array([n_features, 3]))
+    assert_equal(model.covars_.shape, np.array([2, n_features, n_features]))
+    logging.info('TestFitRUR: OK')
+
+
+def test_fit_ruu():
+    n_samples1 = 10000
+    n_features = 5
+    centers1 = np.array([[10, 5, 1, -5, -10],
+                        [-10, -5, -1, 5, 10]])
+    cluster_std1 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0],
+                            [5.0, 4.0, 3.0, 2.0, 1.0]])
+
+    X1, y1 = make_blobs(n_features=n_features,
+                      n_samples=n_samples1,
+                      centers=centers1,
+                      cluster_std=cluster_std1)
+
+    n_samples2 = 5000
+    centers2 = np.array([[10, 5, 1, -5, -10]])
+    cluster_std2 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]])
+    X2, y2 = make_blobs(n_features=n_features,
+                      n_samples=n_samples2,
+                      centers=centers2,
+                      cluster_std=cluster_std2)
+    X = np.vstack((X1, X2))
+
+    model = mixture.PGMM(covariance_type='RUU', n_components=2, n_pc=3)
+    model.fit(X)
+    assert_array_almost_equal(np.sum(model.means_, 0), np.sum(centers1, 0), decimal=0)
+    assert_array_almost_equal(np.sort(model.weights_), np.array([0.333, 0.666]), decimal=1)
+    assert_equal(model.means_.shape, np.array([2, n_features]))
+    assert_equal(model.weights_.shape, np.array([2]))
+    assert_equal(model.noise_.shape, np.array([2, n_features]))
+    assert_equal(model.principal_subspace_.shape, np.array([n_features, 3]))
+    assert_equal(model.covars_.shape, np.array([2, n_features, n_features]))
+    logging.info('TestFitRUU: OK')
+
+
+def test_fit_urr():
+    n_samples1 = 10000
+    n_features = 5
+    centers1 = np.array([[10, 5, 1, -5, -10],
+                        [-10, -5, -1, 5, 10]])
+    cluster_std1 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0],
+                            [5.0, 4.0, 3.0, 2.0, 1.0]])
+
+    X1, y1 = make_blobs(n_features=n_features,
+                      n_samples=n_samples1,
+                      centers=centers1,
+                      cluster_std=cluster_std1)
+
+    n_samples2 = 5000
+    centers2 = np.array([[10, 5, 1, -5, -10]])
+    cluster_std2 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]])
+    X2, y2 = make_blobs(n_features=n_features,
+                      n_samples=n_samples2,
+                      centers=centers2,
+                      cluster_std=cluster_std2)
+    X = np.vstack((X1, X2))
+
+    model = mixture.PGMM(covariance_type='URR', n_components=2, n_pc=3)
+    model.fit(X)
+    assert_array_almost_equal(np.sum(model.means_, 0), np.sum(centers1, 0), decimal=0)
+    assert_array_almost_equal(np.sort(model.weights_), np.array([0.333, 0.666]), decimal=1)
+    assert_equal(model.means_.shape, np.array([2, n_features]))
+    assert_equal(model.weights_.shape, np.array([2]))
+    assert_equal(model.noise_.shape, np.array([1]))
+    assert_equal(model.principal_subspace_.shape, np.array([2, n_features, 3]))
+    assert_equal(model.covars_.shape, np.array([2, n_features, n_features]))
+    logging.info('TestFitURR: OK')
+
+
+def test_fit_uru():
+    n_samples1 = 10000
+    n_features = 5
+    centers1 = np.array([[10, 5, 1, -5, -10],
+                        [-10, -5, -1, 5, 10]])
+    cluster_std1 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0],
+                            [5.0, 4.0, 3.0, 2.0, 1.0]])
+
+    X1, y1 = make_blobs(n_features=n_features,
+                      n_samples=n_samples1,
+                      centers=centers1,
+                      cluster_std=cluster_std1)
+
+    n_samples2 = 5000
+    centers2 = np.array([[10, 5, 1, -5, -10]])
+    cluster_std2 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]])
+    X2, y2 = make_blobs(n_features=n_features,
+                      n_samples=n_samples2,
+                      centers=centers2,
+                      cluster_std=cluster_std2)
+    X = np.vstack((X1, X2))
+
+    model = mixture.PGMM(covariance_type='URU', n_components=2, n_pc=3)
+    model.fit(X)
+    assert_array_almost_equal(np.sum(model.means_, 0), np.sum(centers1, 0), decimal=0)
+    assert_array_almost_equal(np.sort(model.weights_), np.array([0.333, 0.666]), decimal=1)
+    assert_equal(model.means_.shape, np.array([2, n_features]))
+    assert_equal(model.weights_.shape, np.array([2]))
+    assert_equal(model.noise_.shape, np.array([n_features]))
+    assert_equal(model.principal_subspace_.shape, np.array([2, n_features, 3]))
+    assert_equal(model.covars_.shape, np.array([2, n_features, n_features]))
+    logging.info('TestFitURU: OK')
+
+
+def test_fit_uur():
+    n_samples1 = 10000
+    n_features = 5
+    centers1 = np.array([[10, 5, 1, -5, -10],
+                        [-10, -5, -1, 5, 10]])
+    cluster_std1 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0],
+                            [5.0, 4.0, 3.0, 2.0, 1.0]])
+
+    X1, y1 = make_blobs(n_features=n_features,
+                      n_samples=n_samples1,
+                      centers=centers1,
+                      cluster_std=cluster_std1)
+
+    n_samples2 = 5000
+    centers2 = np.array([[10, 5, 1, -5, -10]])
+    cluster_std2 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]])
+    X2, y2 = make_blobs(n_features=n_features,
+                      n_samples=n_samples2,
+                      centers=centers2,
+                      cluster_std=cluster_std2)
+    X = np.vstack((X1, X2))
+
+    model = mixture.PGMM(covariance_type='UUR', n_components=2, n_pc=3)
+    model.fit(X)
+    assert_array_almost_equal(np.sum(model.means_, 0), np.sum(centers1, 0), decimal=0)
+    assert_array_almost_equal(np.sort(model.weights_), np.array([0.333, 0.666]), decimal=1)
+    assert_equal(model.means_.shape, np.array([2, n_features]))
+    assert_equal(model.weights_.shape, np.array([2]))
+    assert_equal(model.noise_.shape, np.array([2]))
+    assert_equal(model.principal_subspace_.shape, np.array([2, n_features, 3]))
+    assert_equal(model.covars_.shape, np.array([2, n_features, n_features]))
+    logging.info('TestFitUUR: OK')
+
+
+def test_fit_uuu():
+    n_samples1 = 10000
+    n_features = 5
+    centers1 = np.array([[10, 5, 1, -5, -10],
+                        [-10, -5, -1, 5, 10]])
+    cluster_std1 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0],
+                            [5.0, 4.0, 3.0, 2.0, 1.0]])
+
+    X1, y1 = make_blobs(n_features=n_features,
+                      n_samples=n_samples1,
+                      centers=centers1,
+                      cluster_std=cluster_std1)
+
+    n_samples2 = 5000
+    centers2 = np.array([[10, 5, 1, -5, -10]])
+    cluster_std2 = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]])
+    X2, y2 = make_blobs(n_features=n_features,
+                      n_samples=n_samples2,
+                      centers=centers2,
+                      cluster_std=cluster_std2)
+    X = np.vstack((X1, X2))
+
+    model = mixture.PGMM(covariance_type='UUU', n_components=2, n_pc=3)
+    model.fit(X)
+    assert_array_almost_equal(np.sum(model.means_, 0), np.sum(centers1, 0), decimal=0)
+    assert_array_almost_equal(np.sort(model.weights_), np.array([0.333, 0.666]), decimal=1)
+    assert_equal(model.means_.shape, np.array([2, n_features]))
+    assert_equal(model.weights_.shape, np.array([2]))
+    assert_equal(model.noise_.shape, np.array([2, n_features]))
+    assert_equal(model.principal_subspace_.shape, np.array([2, n_features, 3]))
+    assert_equal(model.covars_.shape, np.array([2, n_features, n_features]))
+    logging.info('TestFitUUU: OK')

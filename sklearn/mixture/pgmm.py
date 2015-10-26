@@ -777,7 +777,7 @@ def _covar_mstep_RRR(pgmm, X, responsibilities, weighted_X_sum,
         + pgmm.principal_subspace_.dot(pgmm.principal_subspace_.T)))
     theta = np.eye(pgmm.n_pc) - beta.dot(pgmm.principal_subspace_) + beta.dot(final_S).dot(beta.T)
     W = final_S.dot(beta.T).dot(np.linalg.inv(theta))
-    noises = np.trace(final_S - W.dot(beta).dot(final_S))/n_features
+    noises = np.array([np.trace(final_S - W.dot(beta).dot(final_S))/n_features])
 
     return W, noises
 
