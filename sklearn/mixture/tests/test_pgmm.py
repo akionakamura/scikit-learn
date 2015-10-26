@@ -88,11 +88,47 @@ def test_simple_fit_mean_rrr():
                       centers=centers)
     model = mixture.PGMM(covariance_type='RRR')
     model.fit(X)
-    logging.info(model.means_)
-    logging.info(model.noise_)
-    logging.info(model.principal_subspace_)
     assert_array_almost_equal(model.means_, centers, decimal=1)
     logging.info('TestSimpleFitMeansRRR: OK')
+
+
+def test_simple_fit_mean_rru():
+    n_samples = 10000
+    n_features = 5
+    centers = np.array([[10, 5, 1, -5, -10]])
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers)
+    model = mixture.PGMM(covariance_type='RRU')
+    model.fit(X)
+    assert_array_almost_equal(model.means_, centers, decimal=1)
+    logging.info('TestSimpleFitMeansRRU: OK')
+
+
+def test_simple_fit_mean_rur():
+    n_samples = 10000
+    n_features = 5
+    centers = np.array([[10, 5, 1, -5, -10]])
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers)
+    model = mixture.PGMM(covariance_type='RUR')
+    model.fit(X)
+    assert_array_almost_equal(model.means_, centers, decimal=1)
+    logging.info('TestSimpleFitMeansRUR: OK')
+
+
+def test_simple_fit_mean_ruu():
+    n_samples = 10000
+    n_features = 5
+    centers = np.array([[10, 5, 1, -5, -10]])
+    X, y = make_blobs(n_features=n_features,
+                      n_samples=n_samples,
+                      centers=centers)
+    model = mixture.PGMM(covariance_type='RUU')
+    model.fit(X)
+    assert_array_almost_equal(model.means_, centers, decimal=1)
+    logging.info('TestSimpleFitMeansRUU: OK')
 
 
 def test_simple_fit_mean_urr():
