@@ -722,6 +722,12 @@ class PGMM(BaseEstimator):
         """
         return - 2 * self.score(X).sum() + 2 * self._n_parameters()
 
+    def contribution_analysis(self, X):
+        normal_score = self.sum_score(X)
+        dim = X.shape[0]
+        for d in range(dim):
+
+
 
 #########################################################################
 # some helper routines
@@ -979,6 +985,31 @@ def _covar_mstep_UUU(pgmm, X, responsibilities, weighted_X_sum,
         W[c] = S[c].dot(beta[c].T).dot(np.linalg.inv(theta[c]))
         noises[c] = np.diag(S[c] - W[c].dot(beta[c]).dot(S[c]))
     return W, noises
+
+# This assumes only one missing variable, due do dimensionality dropping when slicing.
+def _one_missing_one_model(x, missing_idxs, mean, covar):
+    n, d = x.shape
+    obs_idxs = range(0,d)[:missing_idxs] + range(0, d)[missing_idxs+1:]
+    # Separate the input as observed and missing.
+    x_o = x[:, obs_idxs]
+    x_m = x[:, [missing_idxs]]
+
+    # Separate the means as observed and missing.
+    mean_o = mean[obs_idxs]
+    mean_m = mean[missing_idxs]
+
+    # Separate the covariance.
+    covar_oo = covar[obs_idxs, :][:, obs_idxs]
+    covar_mo = covar[[missing_idxs], :][:, obs_idxs]
+    covar_om = covar[obs_idxs, :][:, [missing_idxs]]
+    covar_mm = covar[[missing_idxs], :][:, [missing_idxs]]
+
+    covar_oo_inv = np.linalg.inv(covar_oo)
+    x_m_given_o = mean_m + covar_mo.dot(covar_oo_inv).dot((x_o - mean_o).T).T
+
+    reconstructed_x = np.array(x, copy=True)
+    reconstructed_x[:, [missing_idxs]] = x_m_given_o
+    return reconstructed_x
 
 
 _covar_mstep_funcs = {'RRR': _covar_mstep_RRR,
