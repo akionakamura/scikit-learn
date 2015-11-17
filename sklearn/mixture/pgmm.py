@@ -722,12 +722,6 @@ class PGMM(BaseEstimator):
         """
         return - 2 * self.score(X).sum() + 2 * self._n_parameters()
 
-    def contribution_analysis(self, X):
-        normal_score = self.sum_score(X)
-        dim = X.shape[0]
-        for d in range(dim):
-
-
 
 #########################################################################
 # some helper routines
