@@ -461,6 +461,48 @@ class PGMM(BaseEstimator):
                     num_comp_in_X, random_state=random_state).T
         return X
 
+    # This assumes only one missing variable, due do dimensionality dropping when slicing.
+    def _one_missing_one_model(self, x, missing_idxs, mean, covar):
+        n, d = x.shape
+        obs_idxs = range(0,d)[:missing_idxs] + range(0, d)[missing_idxs+1:]
+        # Separate the input as observed and missing.
+        x_o = x[:, obs_idxs]
+        x_m = x[:, [missing_idxs]]
+
+        # Separate the means as observed and missing.
+        mean_o = mean[obs_idxs]
+        mean_m = mean[missing_idxs]
+
+        # Separate the covariance.
+        covar_oo = covar[obs_idxs, :][:, obs_idxs]
+        covar_mo = covar[[missing_idxs], :][:, obs_idxs]
+        covar_om = covar[obs_idxs, :][:, [missing_idxs]]
+        covar_mm = covar[[missing_idxs], :][:, [missing_idxs]]
+
+        covar_oo_inv = np.linalg.inv(covar_oo)
+        x_m_given_o = mean_m + covar_mo.dot(covar_oo_inv).dot((x_o - mean_o).T).T
+
+        reconstructed_x = np.array(x, copy=True)
+        reconstructed_x[:, [missing_idxs]] = x_m_given_o
+        return reconstructed_x
+
+    def reconstruct_one_missing(self, x, missing_idxs):
+        reconstruted_x_per_model = np.empty((self.n_components, x.shape[0], x.shape[1]))
+        reconstruted_scores_per_model = np.empty((x.shape[0], self.n_components), dtype='float')
+        comp = 0
+        for mean, covar in zip(self.means_, self.covars_):
+            reconstruted_x_per_model[comp, :, :] = self._one_missing_one_model(x, missing_idxs, mean, covar)
+            reconstruted_scores_per_model[:, comp] = self.score(reconstruted_x_per_model[comp, :, :])
+            comp = comp + 1
+
+        select_from = np.argmax(reconstruted_scores_per_model * self.weights_, axis=1)
+
+        reconstruted_x = np.zeros(x.shape)
+        for idx, component_idx in enumerate(select_from):
+            reconstruted_x[idx] = reconstruted_x_per_model[component_idx, idx, :]
+
+        return reconstruted_x, self.sum_score(reconstruted_x)
+
     def fit_predict(self, X, y=None):
         """Fit and then predict labels for data.
 
